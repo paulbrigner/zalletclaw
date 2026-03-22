@@ -55,6 +55,60 @@ Create an RPC auth entry while letting the user type the password locally:
 zallet --datadir /absolute/path/to/datadir add-rpc-user USERNAME
 ```
 
+## Local RPC Password Storage
+
+After the user creates or rotates an RPC password with `add-rpc-user`, steer them toward a local
+secret store instead of a plaintext `password = "..."` entry in `zallet.toml`.
+
+Preferred on macOS: store the password in Keychain.
+
+```bash
+security add-generic-password \
+  -s zallet-rpc \
+  -a USERNAME \
+  -w 'your-rpc-password' \
+  -U
+```
+
+When the skill needs to use that password through the helper scripts, instruct the user to point
+the helper at the Keychain service and account:
+
+```bash
+python3 skills/zallet-operator/scripts/check_wallet_status.py \
+  --datadir /absolute/path/to/datadir \
+  --http-user USERNAME \
+  --http-password-keychain-service zallet-rpc \
+  --http-password-keychain-account USERNAME
+```
+
+If Keychain is not available, a temporary environment variable is the fallback:
+
+```bash
+export ZALLET_RPC_PASSWORD='your-rpc-password'
+python3 skills/zallet-operator/scripts/check_wallet_status.py \
+  --datadir /absolute/path/to/datadir \
+  --http-user USERNAME \
+  --http-password-env ZALLET_RPC_PASSWORD
+```
+
+For a one-shot send preflight without exporting the variable into the full shell session:
+
+```bash
+ZALLET_RPC_PASSWORD='your-rpc-password' \
+python3 skills/zallet-operator/scripts/send_preflight.py \
+  --datadir /absolute/path/to/datadir \
+  --http-user USERNAME \
+  --http-password-env ZALLET_RPC_PASSWORD \
+  --from main \
+  --recipients-json '[{"address":"RECIPIENT_ADDRESS","amount":"0.001"}]'
+```
+
+Important reminders:
+
+- `--http-password-env` takes the environment variable name, not the password value.
+- `--http-password-keychain-account` defaults to `--http-user` when omitted.
+- Keep the password out of chat, shell history snippets that will be shared, and committed files.
+
 ## Unlocking Warning
 
 Avoid running `walletpassphrase` with a plaintext passphrase through Codex, whether via
@@ -69,8 +123,10 @@ If a send requires an unlocked wallet:
 
 ## RPC Password Hygiene
 
-- If the user needs direct HTTP JSON-RPC, prefer a temporary environment variable in their local
-  shell over editing `zallet.toml` to add a plaintext `password` field.
+- If the user needs direct HTTP JSON-RPC, prefer macOS Keychain or another local secret store over
+  editing `zallet.toml` to add a plaintext `password` field.
+- If Keychain is not available, a temporary environment variable in their local shell is an
+  acceptable fallback.
 - If they only have `pwhash` in config, explain that this is expected and preferable for server
   verification.
 - If they need the optional CLI RPC client, explain that it may require a plaintext `password`

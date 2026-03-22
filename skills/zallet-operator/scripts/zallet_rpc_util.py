@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -121,6 +122,81 @@ def parse_json_bytes(raw: bytes) -> tuple[Any | None, str | None]:
         return json.loads(text), None
     except json.JSONDecodeError as exc:
         return None, str(exc)
+
+
+def lookup_keychain_password(
+    service: str,
+    account: str | None = None,
+) -> tuple[str | None, str | None]:
+    command = ["security", "find-generic-password", "-s", service]
+    if account:
+        command.extend(["-a", account])
+    command.append("-w")
+
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        return None, str(exc)
+
+    if result.returncode == 0:
+        return (result.stdout or "").rstrip("\n"), None
+
+    error_text = ((result.stderr or "") + "\n" + (result.stdout or "")).strip()
+    if not error_text:
+        error_text = f"security exited with status {result.returncode}"
+
+    return None, error_text
+
+
+def resolve_http_password(
+    password_env: str | None = None,
+    keychain_service: str | None = None,
+    keychain_account: str | None = None,
+    default_keychain_account: str | None = None,
+) -> dict[str, Any]:
+    effective_keychain_account = (
+        keychain_account or default_keychain_account if keychain_service else None
+    )
+
+    password = None
+    source = None
+    env_present = None
+    keychain_checked = False
+    keychain_password_present = None
+    keychain_error = None
+
+    if password_env:
+        env_present = password_env in os.environ
+        if env_present:
+            password = os.environ[password_env]
+            source = "env"
+
+    if password is None and keychain_service:
+        keychain_checked = True
+        password, keychain_error = lookup_keychain_password(
+            keychain_service,
+            effective_keychain_account,
+        )
+        keychain_password_present = password is not None
+        if password is not None:
+            source = "keychain"
+
+    return {
+        "password": password,
+        "source": source,
+        "env_name": password_env,
+        "env_present": env_present,
+        "keychain_service": keychain_service,
+        "keychain_account": effective_keychain_account,
+        "keychain_checked": keychain_checked,
+        "keychain_password_present": keychain_password_present,
+        "keychain_error": keychain_error,
+    }
 
 
 def parse_minimal_toml(text: str) -> dict[str, Any]:

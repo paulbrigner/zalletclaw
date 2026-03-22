@@ -93,6 +93,70 @@ The skill is built around Zallet's JSON-RPC surface.
 - In practice, this means the skill can still work even when the JSON-RPC server is enabled but
   the CLI RPC client feature was not compiled into the binary.
 
+## RPC Password Handling
+
+This skill is designed to avoid storing plaintext RPC passwords in `zallet.toml`.
+
+- Server-side `pwhash` entries in `zallet.toml` are fine and preferred for Zallet itself.
+- Client-side helper scripts still need the actual plaintext password in order to authenticate to
+  the JSON-RPC server.
+- Preferred on macOS: store the password in Keychain and tell the helper which service/account to
+  read.
+- Fallback: provide the password through an environment variable and tell the helper which variable
+  name to read with `--http-password-env`.
+
+Example Keychain setup:
+
+```bash
+security add-generic-password \
+  -s zallet-rpc \
+  -a YOUR_RPC_USER \
+  -w 'your-rpc-password' \
+  -U
+```
+
+Example Keychain usage:
+
+```bash
+python3 skills/zallet-operator/scripts/check_wallet_status.py \
+  --datadir /absolute/path/to/datadir \
+  --http-user YOUR_RPC_USER \
+  --http-password-keychain-service zallet-rpc \
+  --http-password-keychain-account YOUR_RPC_USER
+```
+
+Example:
+
+```bash
+export ZALLET_RPC_PASSWORD='your-rpc-password'
+python3 skills/zallet-operator/scripts/check_wallet_status.py \
+  --datadir /absolute/path/to/datadir \
+  --http-user YOUR_RPC_USER \
+  --http-password-env ZALLET_RPC_PASSWORD
+```
+
+Or as a one-shot command:
+
+```bash
+ZALLET_RPC_PASSWORD='your-rpc-password' \
+python3 skills/zallet-operator/scripts/send_preflight.py \
+  --datadir /absolute/path/to/datadir \
+  --http-user YOUR_RPC_USER \
+  --http-password-env ZALLET_RPC_PASSWORD \
+  --from main \
+  --recipients-json '[{"address":"RECIPIENT_ADDRESS","amount":"0.001"}]'
+```
+
+Notes:
+
+- The helper scripts resolve passwords in this order: `--http-password-env`, then Keychain.
+- `--http-password-env` takes the environment variable name, not the password value.
+- `--http-password-keychain-account` defaults to `--http-user` when omitted.
+- The password should not be committed to the repo or added to `zallet.toml` just for client
+  convenience.
+- If you want Codex itself to use that environment variable, the Codex app needs to inherit it
+  from its launch environment.
+
 ## Helper Scripts in This Repository
 
 The skill includes small helper scripts to make agent behavior more deterministic:

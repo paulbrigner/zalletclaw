@@ -15,9 +15,14 @@ mode, and guarded send mode based on the task.
 Primary source of truth:
 
 - a local Zallet checkout, preferably a sibling `../zallet` repo when present
+- when a live `zallet start` process exists, the resolved binary path from that process overrides
+  any guessed checkout path
 
 ## Workflow Decision Tree
 
+- Use the wallet-status workflow below when the user asks whether their wallet is up, synced,
+  funded, idle, or has recent activity. Use [references/rpc.md](references/rpc.md) for the auth
+  retry order, helper output modes, JSON mapping, and compact answer template.
 - Use [references/account-model.md](references/account-model.md) when the user is asking
   conceptual wallet questions about accounts, addresses, diversifiers, change, or privacy.
 - Use [references/manual-secret-ops.md](references/manual-secret-ops.md) when the task touches
@@ -36,6 +41,7 @@ Use this skill for prompts such as:
 
 - `Show me how to generate a Zallet config for this datadir.`
 - `Help me inspect balances and accounts in my local Zallet wallet.`
+- `What is the status of my wallet?`
 - `Why does this wallet show so many known addresses?`
 - `Explain what this account UUID, seedfp, or diversifier index means.`
 - `What kind of Zcash address is this?`
@@ -48,11 +54,70 @@ Use this skill for prompts such as:
 
 - Read the local Zallet docs or source when method or command behavior is unclear.
 - Prefer local repository state over memory because Zallet is alpha and may change.
+- Discover the live wallet process before assuming default paths:
+  - inspect `ps` output for a running `zallet ... start`
+  - capture the explicit `--datadir` or `-d` value when present
+  - use `lsof -a -p <pid> -d cwd,txt -Fn` when you need the running checkout path and the actual
+    binary path
+- when a live process exists, prefer its resolved binary path over a sibling `../zallet` checkout
+  or any other inferred source path
 - Check `zallet --help` before assuming the `rpc` CLI subcommand exists; some builds expose the
   JSON-RPC server without compiling the RPC client subcommand.
 - Prefer `zallet rpc help <method>` or `zallet rpc rpc.discover` when you need the live RPC
   contract when the CLI RPC client exists.
 - Prefer `rg` against the adjacent repo when you need to confirm a command name, flag, or method.
+- Render reported timestamps in the user's local timezone when that context is available. If it is
+  not, label UTC explicitly instead of implying local time.
+
+## Wallet Status Workflow
+
+When the user asks for wallet status, answer from multiple signals instead of relying on
+`getwalletinfo` alone.
+
+Operator recipe:
+
+1. Find a live `zallet ... start` process and resolve its binary path and datadir.
+2. Run `python3 scripts/check_wallet_status.py --format json` with the discovered binary,
+   datadir, and the appropriate auth source.
+3. Treat `check_wallet_status.py` as the wallet-status aggregator. It already resolves config and
+   auth shape and collects the log sync signal, balances, note counts, pending operation IDs, and
+   recent transactions.
+4. If the config has a single `[[rpc.auth]]` user, let the helper infer that username instead of
+   opening `zallet.toml` separately unless auth debugging requires it.
+5. If authenticated HTTP succeeds and `summary_available` is true, stop and summarize from the
+   helper output using the compact template in [references/rpc.md](references/rpc.md), or let the
+   helper render the answer directly with `--format summary --timezone local`. Do not inspect the
+   helper source, make extra RPC calls, or reopen the config or log unless the helper result is
+   missing fields or appears inconsistent.
+6. If no live process exists, report that the wallet is not currently running. Switch to
+   [references/cli.md](references/cli.md) only if the user wants startup or config
+   troubleshooting.
+
+Common running-wallet command:
+
+```bash
+ps aux | rg '[z]allet( |$).*start'
+lsof -a -p PID -d cwd,txt -Fn
+python3 scripts/check_wallet_status.py \
+  --binary /path/to/zallet \
+  --datadir /absolute/path/to/datadir \
+  --http-password-keychain-service zallet-rpc \
+  --format json
+```
+
+Swap the auth flags for `--http-user USERNAME --http-password-env ENV_VAR_NAME` when Keychain is
+not the active local secret store.
+
+For a direct user-facing status answer from the helper, prefer:
+
+```bash
+python3 scripts/check_wallet_status.py \
+  --binary /path/to/zallet \
+  --datadir /absolute/path/to/datadir \
+  --http-password-keychain-service zallet-rpc \
+  --format summary \
+  --timezone local
+```
 
 ## Guidance Mode
 
@@ -66,11 +131,19 @@ Use this skill for prompts such as:
 ## Direct Execution Mode
 
 - Use CLI or JSON-RPC directly for non-secret setup and inspection tasks.
+- Invoke repo Python helpers with `python3 ...` instead of assuming executable permissions are set.
 - Use the helper script at `scripts/build_rpc_command.py` when shell quoting for JSON-RPC
   parameters is error-prone or when you need to choose between the `rpc` CLI subcommand and
   direct HTTP transport.
-- Use `scripts/check_wallet_status.py` when the user is confused about binary features, config
-  paths, RPC reachability, or auth shape.
+- Treat `scripts/check_wallet_status.py` as the default wallet-status entry point. It already
+  covers config discovery, auth resolution, log sync inspection, balances, note counts, pending
+  operations, and recent transactions.
+- Prefer `--format json` when another agent will summarize the result or branch on specific
+  fields. Prefer `--format summary --timezone local` when you want the helper to emit a compact
+  user-facing status answer directly.
+- If the helper returns `summary_available = true`, summarize that output and stop unless you are
+  debugging a mismatch or extending the helper itself. Only inspect config, logs, or extra RPC
+  methods when required fields are missing or the result appears inconsistent.
 - Use `scripts/send_preflight.py` when you need a deterministic send summary before asking for
   confirmation.
 - Use absolute datadir paths when passing `--datadir`.
@@ -84,17 +157,6 @@ Use this skill for prompts such as:
 - Execute the send once.
 - Poll the returned operation ID with `z_getoperationstatus` or `z_getoperationresult`.
 - Verify post-send state with inspection RPCs instead of blindly retrying.
-
-## Example Routing
-
-- If the user asks what an account, address, or diversifier means, use
-  [references/account-model.md](references/account-model.md) before answering.
-- If the user asks to create or import wallet secret material, switch to guidance mode and use
-  [references/manual-secret-ops.md](references/manual-secret-ops.md).
-- If the user asks to inspect wallet state, use [references/rpc.md](references/rpc.md) and favor
-  read-only RPC methods.
-- If the user asks to send funds, use [references/send-flows.md](references/send-flows.md),
-  construct the command, summarize it, and wait for explicit confirmation.
 
 ## Resources
 

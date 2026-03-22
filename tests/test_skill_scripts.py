@@ -5,6 +5,7 @@ import importlib.util
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -21,6 +22,7 @@ def load_module(name: str, path: Path):
 
 
 build_rpc_command = load_module("build_rpc_command", SCRIPTS_DIR / "build_rpc_command.py")
+check_wallet_status = load_module("check_wallet_status", SCRIPTS_DIR / "check_wallet_status.py")
 send_preflight = load_module("send_preflight", SCRIPTS_DIR / "send_preflight.py")
 zallet_rpc_util = load_module("zallet_rpc_util", SCRIPTS_DIR / "zallet_rpc_util.py")
 
@@ -32,8 +34,24 @@ class BuildRpcCommandTests(unittest.TestCase):
             ["curl", "-sS", "http://127.0.0.1:28232"],
             "alice",
             "RPC_PASSWORD",
+            None,
+            None,
         )
         self.assertIn('-u "alice:${RPC_PASSWORD}"', rendered)
+
+    def test_render_shell_injects_keychain_lookup(self) -> None:
+        rendered = build_rpc_command.render_shell(
+            "http",
+            ["curl", "-sS", "http://127.0.0.1:28232"],
+            "alice",
+            None,
+            "zallet-rpc",
+            "alice",
+        )
+        self.assertIn(
+            "security find-generic-password -s zallet-rpc -a alice -w",
+            rendered,
+        )
 
     def test_choose_transport_auto_falls_back_to_http(self) -> None:
         args = argparse.Namespace(transport="auto", binary="/definitely/missing/zallet")
@@ -78,6 +96,324 @@ class SharedUtilTests(unittest.TestCase):
             zallet_rpc_util.infer_http_url(None, ["127.0.0.1:28232"]),
             "http://127.0.0.1:28232",
         )
+
+    def test_resolve_http_password_prefers_env(self) -> None:
+        with mock.patch.dict("os.environ", {"RPC_PASSWORD": "env-secret"}, clear=True):
+            with mock.patch.object(
+                zallet_rpc_util,
+                "lookup_keychain_password",
+                return_value=("keychain-secret", None),
+            ) as mocked_lookup:
+                result = zallet_rpc_util.resolve_http_password(
+                    password_env="RPC_PASSWORD",
+                    keychain_service="zallet-rpc",
+                    keychain_account="alice",
+                )
+
+        self.assertEqual(result["source"], "env")
+        self.assertEqual(result["password"], "env-secret")
+        mocked_lookup.assert_not_called()
+
+    def test_resolve_http_password_falls_back_to_keychain(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with mock.patch.object(
+                zallet_rpc_util,
+                "lookup_keychain_password",
+                return_value=("keychain-secret", None),
+            ) as mocked_lookup:
+                result = zallet_rpc_util.resolve_http_password(
+                    password_env="RPC_PASSWORD",
+                    keychain_service="zallet-rpc",
+                    default_keychain_account="alice",
+                )
+
+        self.assertEqual(result["source"], "keychain")
+        self.assertEqual(result["password"], "keychain-secret")
+        mocked_lookup.assert_called_once_with("zallet-rpc", "alice")
+
+
+class CheckWalletStatusTests(unittest.TestCase):
+    def test_infer_http_user_from_sole_auth_entry(self) -> None:
+        auth_entries = [{"user": "localcheck", "has_pwhash": True, "has_password": False}]
+        self.assertEqual(check_wallet_status.infer_http_user(auth_entries), "localcheck")
+
+    def test_build_wallet_summary_collects_balances_and_recent_transactions(self) -> None:
+        def fake_json_rpc_request(url, method, params, timeout, user, password):
+            self.assertEqual(url, "http://127.0.0.1:28232")
+            self.assertEqual(user, "alice")
+            self.assertEqual(password, "pw")
+            if method == "z_listaccounts":
+                return {
+                    "http_ok": True,
+                    "status_code": 200,
+                    "rpc_error": None,
+                    "rpc_result": [
+                        {
+                            "account_uuid": "uuid-1",
+                            "name": "main",
+                            "seedfp": "seedfp",
+                            "zip32_account_index": 0,
+                            "addresses": [{"ua": "u1a"}, {"ua": "u1b"}],
+                        }
+                    ],
+                }
+            if method == "z_getbalances":
+                return {
+                    "http_ok": True,
+                    "status_code": 200,
+                    "rpc_error": None,
+                    "rpc_result": {
+                        "accounts": [
+                            {
+                                "account_uuid": "uuid-1",
+                                "total": {"spendable": {"valueZat": 12345678}},
+                            }
+                        ]
+                    },
+                }
+            if method == "z_getnotescount":
+                return {
+                    "http_ok": True,
+                    "status_code": 200,
+                    "rpc_error": None,
+                    "rpc_result": {"orchard": 2, "sapling": 0, "sprout": 0},
+                }
+            if method == "z_listoperationids":
+                return {
+                    "http_ok": True,
+                    "status_code": 200,
+                    "rpc_error": None,
+                    "rpc_result": ["op-1"],
+                }
+            if method == "z_listtransactions":
+                self.assertEqual(params, ["uuid-1", None, None, 0, 100])
+                return {
+                    "http_ok": True,
+                    "status_code": 200,
+                    "rpc_error": None,
+                    "rpc_result": [
+                        {
+                            "account_balance_delta": 200000,
+                            "block_datetime": "2026-03-20T10:00:00Z",
+                            "block_time": 100,
+                            "expired_unmined": False,
+                            "mined_height": 10,
+                            "received_note_count": 1,
+                            "sent_note_count": 0,
+                            "txid": "tx-1",
+                        },
+                        {
+                            "account_balance_delta": -110000,
+                            "block_datetime": "2026-03-22T14:14:06Z",
+                            "block_time": 200,
+                            "expired_unmined": False,
+                            "mined_height": 20,
+                            "received_note_count": 0,
+                            "sent_note_count": 1,
+                            "txid": "tx-2",
+                        },
+                    ],
+                }
+            raise AssertionError(f"Unexpected method {method}")
+
+        with mock.patch.object(check_wallet_status, "json_rpc_request", side_effect=fake_json_rpc_request):
+            summary = check_wallet_status.build_wallet_summary(
+                "http://127.0.0.1:28232",
+                "alice",
+                "pw",
+                5,
+                2,
+            )
+
+        self.assertTrue(summary["summary_available"])
+        self.assertEqual(summary["account_count"], 1)
+        self.assertEqual(summary["operation_ids"], ["op-1"])
+        self.assertEqual(summary["note_counts"]["orchard"], 2)
+        account = summary["accounts"][0]
+        self.assertEqual(account["name"], "main")
+        self.assertEqual(account["known_address_count"], 2)
+        self.assertEqual(account["spendable_balance_zec"], "0.12345678")
+        self.assertEqual(account["recent_transactions"][-1]["direction"], "sent")
+        self.assertEqual(account["recent_transactions"][-1]["absolute_balance_delta_zec"], "0.00110000")
+
+    def test_read_log_status_extracts_chain_tip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "zallet.log"
+            log_path.write_text(
+                textwrap.dedent(
+                    """\
+                    \x1b[2m2026-03-22T20:17:33.121430Z\x1b[0m INFO steady_state: Reached chain tip, streaming mempool
+                    \x1b[2m2026-03-22T20:17:33.193802Z\x1b[0m INFO steady_state: New chain tip: 3281708 0000000000330e28fe8b84cafb75b6bbbe1fec016bda4224fa32217de49cf57d
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            status = check_wallet_status.read_log_status(log_path)
+
+        self.assertTrue(status["exists"])
+        self.assertTrue(status["recently_reached_chain_tip"])
+        self.assertEqual(status["latest_chain_tip"]["height"], 3281708)
+
+    def test_render_text_localizes_timestamps(self) -> None:
+        status = {
+            "binary": {
+                "requested": "/path/to/zallet",
+                "resolved_path": "/path/to/zallet",
+                "exists": True,
+                "supports_rpc_cli": False,
+            },
+            "config": {
+                "datadir": "/wallet",
+                "path": "/wallet/zallet.toml",
+                "exists": True,
+                "rpc_binds": ["127.0.0.1:28232"],
+                "rpc_auth": [{"user": "localcheck", "has_password": False, "has_pwhash": True}],
+            },
+            "log": {
+                "path": "/wallet/zallet.log",
+                "exists": True,
+                "latest_chain_tip": {
+                    "height": 3281739,
+                    "hash": "abc123",
+                    "log_time": "2026-03-22T20:53:37.972636Z",
+                },
+                "recently_reached_chain_tip": True,
+                "latest_reached_chain_tip_log_time": "2026-03-22T20:53:37.974719Z",
+            },
+            "http": {
+                "url": "http://127.0.0.1:28232",
+                "client_user": "localcheck",
+                "client_user_inferred": True,
+                "password_env": None,
+                "password_env_present": None,
+                "password_source": "keychain",
+                "password_keychain_service": "zallet-rpc",
+                "password_keychain_account": "localcheck",
+                "password_keychain_present": True,
+                "password_keychain_error": None,
+                "probe_method": "getwalletinfo",
+                "probe": {"status_code": 200, "http_ok": True, "rpc_error": None, "transport_error": None},
+            },
+            "wallet": {
+                "summary_attempted": True,
+                "summary_available": True,
+                "account_count": 1,
+                "accounts": [
+                    {
+                        "account_uuid": "uuid-1",
+                        "name": "main",
+                        "known_address_count": 40,
+                        "spendable_balance_zec": "0.11271754",
+                        "recent_transactions": [
+                            {
+                                "block_datetime": "2026-03-22T14:14:06Z",
+                                "direction": "sent",
+                                "absolute_balance_delta_zec": "0.00110000",
+                                "account_balance_delta_zec": "-0.00110000",
+                            }
+                        ],
+                    }
+                ],
+                "note_counts": {"orchard": 19, "sapling": 0, "sprout": 0},
+                "operation_ids": [],
+                "method_errors": {},
+            },
+            "notes": [],
+        }
+
+        rendered = check_wallet_status.render_text(
+            status,
+            check_wallet_status.resolve_output_timezone("America/New_York"),
+        )
+
+        self.assertIn("2026-03-22 04:53:37 PM EDT", rendered)
+        self.assertIn("2026-03-22 10:14:06 AM EDT", rendered)
+
+    def test_render_summary_includes_localized_recent_activity(self) -> None:
+        status = {
+            "binary": {
+                "requested": "/path/to/zallet",
+                "resolved_path": "/path/to/zallet",
+                "exists": True,
+                "supports_rpc_cli": False,
+            },
+            "config": {
+                "datadir": "/wallet",
+                "path": "/wallet/zallet.toml",
+                "exists": True,
+                "rpc_binds": ["127.0.0.1:28232"],
+                "rpc_auth": [{"user": "localcheck", "has_password": False, "has_pwhash": True}],
+            },
+            "log": {
+                "path": "/wallet/zallet.log",
+                "exists": True,
+                "latest_chain_tip": {
+                    "height": 3281739,
+                    "hash": "abc123",
+                    "log_time": "2026-03-22T20:53:37.972636Z",
+                },
+                "recently_reached_chain_tip": True,
+                "latest_reached_chain_tip_log_time": "2026-03-22T20:53:37.974719Z",
+            },
+            "http": {
+                "url": "http://127.0.0.1:28232",
+                "client_user": "localcheck",
+                "client_user_inferred": True,
+                "password_env": None,
+                "password_env_present": None,
+                "password_source": "keychain",
+                "password_keychain_service": "zallet-rpc",
+                "password_keychain_account": "localcheck",
+                "password_keychain_present": True,
+                "password_keychain_error": None,
+                "probe_method": "getwalletinfo",
+                "probe": {"status_code": 200, "http_ok": True, "rpc_error": None, "transport_error": None},
+            },
+            "wallet": {
+                "summary_attempted": True,
+                "summary_available": True,
+                "account_count": 1,
+                "accounts": [
+                    {
+                        "account_uuid": "uuid-1",
+                        "name": "main",
+                        "known_address_count": 40,
+                        "spendable_balance_zec": "0.11271754",
+                        "recent_transactions": [
+                            {
+                                "block_datetime": "2026-03-19T20:00:10Z",
+                                "direction": "received",
+                                "absolute_balance_delta_zec": "0.00425000",
+                                "account_balance_delta_zec": "0.00425000",
+                            },
+                            {
+                                "block_datetime": "2026-03-22T14:14:06Z",
+                                "direction": "sent",
+                                "absolute_balance_delta_zec": "0.00110000",
+                                "account_balance_delta_zec": "-0.00110000",
+                            },
+                        ],
+                    }
+                ],
+                "note_counts": {"orchard": 19, "sapling": 0, "sprout": 0},
+                "operation_ids": [],
+                "method_errors": {},
+            },
+            "notes": [
+                "getwalletinfo appears to be placeholder-only in this build; use z_getbalances, z_listaccounts, z_getnotescount, z_listoperationids, and z_listtransactions for real wallet status."
+            ],
+        }
+
+        rendered = check_wallet_status.render_summary(
+            status,
+            check_wallet_status.resolve_output_timezone("America/New_York"),
+        )
+
+        self.assertIn("Wallet status looks healthy.", rendered)
+        self.assertIn("2026-03-22 04:53:37 PM EDT", rendered)
+        self.assertIn("- 2026-03-19 04:00:10 PM EDT: main received 0.00425000 ZEC", rendered)
+        self.assertIn("- 2026-03-22 10:14:06 AM EDT: main sent 0.00110000 ZEC", rendered)
 
 
 class SendPreflightTests(unittest.TestCase):

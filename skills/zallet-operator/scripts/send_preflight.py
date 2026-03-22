@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -22,6 +21,7 @@ from zallet_rpc_util import (
     infer_http_url,
     json_rpc_request,
     load_toml_file,
+    resolve_http_password,
     resolve_config_path,
 )
 
@@ -66,6 +66,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--http-password-env",
         help="Environment variable that stores the HTTP Basic auth password.",
+    )
+    parser.add_argument(
+        "--http-password-keychain-service",
+        help="macOS Keychain service name used to look up the HTTP Basic auth password.",
+    )
+    parser.add_argument(
+        "--http-password-keychain-account",
+        help="macOS Keychain account name. Defaults to --http-user when omitted.",
     )
     parser.add_argument("--timeout", type=int, default=10, help="HTTP timeout in seconds.")
     parser.add_argument(
@@ -286,13 +294,24 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     if not http_url:
         raise ValueError("could not determine HTTP JSON-RPC URL from args or config")
 
-    password = None
-    if args.http_password_env:
-        password = os.environ.get(args.http_password_env)
-        if password is None:
-            raise ValueError(f"environment variable {args.http_password_env} is not set")
+    password_info = resolve_http_password(
+        password_env=args.http_password_env,
+        keychain_service=args.http_password_keychain_service,
+        keychain_account=args.http_password_keychain_account,
+        default_keychain_account=args.http_user,
+    )
+    if args.http_user and password_info["source"] is None and (
+        args.http_password_env or args.http_password_keychain_service
+    ):
+        failures = []
+        if args.http_password_env and not password_info["env_present"]:
+            failures.append(f"environment variable {args.http_password_env} is not set")
+        if args.http_password_keychain_service and not password_info["keychain_password_present"]:
+            detail = password_info["keychain_error"] or "item not found"
+            failures.append(f"Keychain lookup failed: {detail}")
+        raise ValueError("; ".join(failures))
 
-    client = RpcClient(http_url, args.http_user, password, args.timeout)
+    client = RpcClient(http_url, args.http_user, password_info["password"], args.timeout)
     recipients = parse_recipients(load_recipients_input(args))
     accounts = client.call("z_listaccounts", [True])
     if not isinstance(accounts, list):
@@ -361,6 +380,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             "http_url": http_url,
             "http_user": args.http_user,
             "password_env": args.http_password_env,
+            "password_source": password_info["source"],
+            "password_keychain_service": password_info["keychain_service"],
+            "password_keychain_account": password_info["keychain_account"],
         },
         "warnings": warnings,
     }
@@ -384,6 +406,7 @@ def render_text(report: dict[str, Any]) -> str:
         f"- Requested send total: {balances['requested_total']} ZEC",
         f"- Privacy policy: {report['privacy_policy']}",
         f"- Pending operations: {wallet_state['pending_operation_count']}",
+        f"- Password source: {report['transport']['password_source'] or 'none'}",
     ]
 
     if wallet_state["wallet_encrypted"]:

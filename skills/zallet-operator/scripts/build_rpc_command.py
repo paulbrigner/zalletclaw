@@ -68,6 +68,14 @@ def parse_args() -> argparse.Namespace:
         help="Environment variable name holding the HTTP Basic auth password.",
     )
     parser.add_argument(
+        "--http-password-keychain-service",
+        help="macOS Keychain service name used to resolve the HTTP Basic auth password at execution time.",
+    )
+    parser.add_argument(
+        "--http-password-keychain-account",
+        help="macOS Keychain account name. Defaults to --http-user when omitted.",
+    )
+    parser.add_argument(
         "--format",
         choices=("shell", "argv-json"),
         default="shell",
@@ -94,6 +102,8 @@ def load_params(args: argparse.Namespace) -> list[object]:
         raise ValueError("parameter input must decode to a JSON array")
 
     return params
+
+
 def choose_transport(args: argparse.Namespace) -> str:
     if args.transport in ("cli", "http"):
         return args.transport
@@ -130,9 +140,20 @@ def build_http_command(args: argparse.Namespace, params: list[object]) -> list[s
     if not args.http_url:
         raise ValueError("http transport requires --http-url")
 
-    if bool(args.http_user) != bool(args.http_password_env):
+    has_password_source = bool(
+        args.http_password_env or args.http_password_keychain_service
+    )
+    if bool(args.http_user) != has_password_source:
         raise ValueError(
-            "http auth requires both --http-user and --http-password-env, or neither"
+            "http auth requires both --http-user and one password source, or neither"
+        )
+    if args.http_password_keychain_account and not args.http_password_keychain_service:
+        raise ValueError(
+            "--http-password-keychain-account requires --http-password-keychain-service"
+        )
+    if args.format == "argv-json" and args.http_password_keychain_service:
+        raise ValueError(
+            "argv-json output does not support Keychain command substitution; use shell format or --http-password-env"
         )
 
     payload = json.dumps(
@@ -168,11 +189,21 @@ def shell_quote_with_env(value: str) -> str:
     return f'"{escaped}"'
 
 
+def build_keychain_password_expr(service: str, account: str | None) -> str:
+    command = f"$(security find-generic-password -s {shlex.quote(service)}"
+    if account:
+        command += f" -a {shlex.quote(account)}"
+    command += " -w)"
+    return command
+
+
 def render_shell(
     transport: str,
     command: list[str],
     http_user: str | None,
     http_password_env: str | None,
+    http_password_keychain_service: str | None,
+    http_password_keychain_account: str | None,
 ) -> str:
     if transport != "http" or not http_user:
         return shlex.join(command)
@@ -183,7 +214,13 @@ def render_shell(
     for token in command:
         rendered.append(shlex.quote(token))
         if token == "curl" and not inserted_auth:
-            auth_token = f"{http_user}:${{{http_password_env}}}"
+            if http_password_env:
+                auth_token = f"{http_user}:${{{http_password_env}}}"
+            else:
+                auth_token = (
+                    f"{http_user}:"
+                    f"{build_keychain_password_expr(http_password_keychain_service, http_password_keychain_account)}"
+                )
             rendered.extend(["-u", shell_quote_with_env(auth_token)])
             inserted_auth = True
 
@@ -214,6 +251,8 @@ def main() -> int:
                 command,
                 args.http_user,
                 args.http_password_env,
+                args.http_password_keychain_service,
+                args.http_password_keychain_account or args.http_user,
             )
         )
 

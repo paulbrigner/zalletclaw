@@ -68,7 +68,7 @@ Prefer the deterministic preflight helper before execution:
 python3 scripts/send_preflight.py \
   --datadir /absolute/path/to/datadir \
   --http-user "${RPC_USER}" \
-  --http-password-env ZALLET_RPC_PASSWORD \
+  --http-password-keychain-service zallet-rpc \
   --from "ACCOUNT_NAME_OR_UUID_OR_ADDRESS" \
   --recipients-json '[{"address":"RECIPIENT_ADDRESS","amount":"0.01000000"}]'
 ```

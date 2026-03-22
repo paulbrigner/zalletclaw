@@ -5,11 +5,19 @@ management once a wallet is running.
 
 ## Transport Selection
 
+- Discover a live wallet process before assuming default paths:
+  - inspect `ps` output for `zallet ... start`
+  - capture `--datadir` or `-d`
+  - use `lsof -a -p <pid> -d cwd,txt -Fn` when you need both the checkout path and the actual
+    binary path
+- when a live process exists, prefer the resolved binary path from that process over a sibling
+  checkout path or any other inferred source path
 - Run `zallet --help` before assuming the `rpc` subcommand exists.
 - Use `zallet rpc ...` when the binary exposes the `rpc` subcommand.
 - Use direct HTTP JSON-RPC against the configured `rpc.bind` address when the binary does not.
 - Use `scripts/check_wallet_status.py` when you need a deterministic check of binary features,
-  config paths, auth shape, and live HTTP reachability.
+  config paths, auth shape, live HTTP reachability, log sync state, balances, note counts,
+  pending operations, and recent transactions.
 - Expect `401 Unauthorized` when the server requires Basic auth and no credentials are supplied.
 - Remember that `zallet.toml` usually stores only a password hash, so the agent cannot recover
   the plaintext RPC password.
@@ -25,13 +33,167 @@ management once a wallet is running.
 
 ## Auth Handling
 
-- Prefer environment-backed credentials for direct HTTP requests.
+- Prefer macOS Keychain for local password storage when available.
+- Use environment-backed credentials as a fallback when Keychain is not available or not desired.
 - Do not inline plaintext RPC passwords into reusable scripts, committed files, or long-lived
   shell history.
 - If the user needs to troubleshoot auth, ask for the username and redacted config shape, not the
   password itself.
-- If the wallet only has `pwhash` auth entries, treat HTTP JSON-RPC with env-backed credentials as
-  the primary transport.
+- If the wallet only has `pwhash` auth entries, treat HTTP JSON-RPC with a local secret store or
+  env-backed credentials as the primary transport.
+- The helper scripts resolve passwords in this order: env var first, then Keychain.
+- For wallet-status checks, if an initial unauthenticated probe returns `401 Unauthorized`, retry
+  immediately with Keychain on macOS or an env-backed password before concluding the wallet is
+  unreachable.
+
+## Wallet Status Recipes
+
+Use these default sequences for "what is the status of my wallet?" Start by checking for a live
+wallet process instead of assuming the wallet is already running.
+
+### No live process found
+
+If `ps` does not show `zallet ... start`, report that the wallet is not currently running instead
+of guessing a default datadir or probing stale config paths.
+
+- If the user wants startup help, switch to [cli.md](cli.md).
+- If the user wants config troubleshooting for a specific datadir, inspect that datadir
+  explicitly rather than assuming `~/.zallet`.
+- Do not describe the wallet as unreachable until you have distinguished "not running" from
+  "running but auth or transport failed."
+
+### macOS Keychain-backed default
+
+Find the live process, datadir, checkout path, and binary path:
+
+```bash
+ps aux | rg '[z]allet( |$)'
+lsof -a -p PID -d cwd,txt -Fn
+```
+
+Run the status helper with the discovered binary and datadir. If the config has a single
+`[[rpc.auth]]` user, the helper will infer it automatically:
+
+```bash
+python3 scripts/check_wallet_status.py \
+  --binary /path/to/zallet \
+  --datadir /absolute/path/to/datadir \
+  --http-password-keychain-service zallet-rpc
+```
+
+If the first probe shows `401 Unauthorized`, keep the same command and let the helper resolve the
+password from the `zallet-rpc` Keychain item for the inferred or explicit RPC user.
+
+### Environment-backed fallback
+
+When Keychain is not available, point the helper at an existing local env var that already stores
+the RPC password:
+
+```bash
+python3 scripts/check_wallet_status.py \
+  --binary /path/to/zallet \
+  --datadir /absolute/path/to/datadir \
+  --http-user USERNAME \
+  --http-password-env ZALLET_RPC_PASSWORD
+```
+
+If auth is still unavailable after the env-backed retry, stop and ask only for sanitized
+confirmation of where the password is stored or whether auth is configured. Do not ask for the
+plaintext password.
+
+### Agent-friendly JSON summary
+
+When another agent or script will summarize wallet status, prefer JSON output from the helper
+instead of the human-oriented text format:
+
+```bash
+python3 scripts/check_wallet_status.py \
+  --binary /path/to/zallet \
+  --datadir /absolute/path/to/datadir \
+  --http-password-keychain-service zallet-rpc \
+  --format json
+```
+
+Use the same `--format json` flag with `--http-user` and `--http-password-env` for env-backed
+auth. Summarize from the structured fields instead of scraping text output. When the helper
+returns `summary_available = true`, that result is usually sufficient for the final wallet-status
+answer without extra manual RPC calls.
+
+### Direct human summary
+
+When you want the helper to produce a user-facing wallet-status answer directly, prefer:
+
+```bash
+python3 scripts/check_wallet_status.py \
+  --binary /path/to/zallet \
+  --datadir /absolute/path/to/datadir \
+  --http-password-keychain-service zallet-rpc \
+  --format summary \
+  --timezone local
+```
+
+Use `--timezone local` for the machine's local timezone, `--timezone utc` for explicit UTC, or an
+IANA timezone such as `--timezone America/New_York` when you need a specific render target.
+
+If the helper reports `summary_available = true`, stop there by default.
+
+- Do not make extra RPC calls just to reconfirm balances, accounts, notes, operations, or recent
+  transactions.
+- Do not reopen `zallet.toml` separately when `client_user_inferred = true`; the helper has
+  already selected the sole `[[rpc.auth]]` user.
+- Do not inspect `zallet.log` separately when `log.latest_chain_tip` and
+  `log.latest_reached_chain_tip_log_time` are present.
+- Do not inspect the helper source just to confirm what the wallet-status path already gathers;
+  the helper is the intended aggregator for these fields.
+- Only do extra config, log, or RPC inspection when the helper is missing required fields or the
+  result appears internally inconsistent.
+
+## Common Success Interpretation
+
+Use these quick interpretations when the helper succeeds:
+
+- `supports_rpc_cli = false` means the wallet should be inspected over direct HTTP JSON-RPC; it is
+  not itself a wallet failure.
+- `client_user_inferred = true` means the helper selected the sole `[[rpc.auth]]` user from the
+  config, so the operator does not need to guess a username or reopen the config unless debugging
+  auth.
+- `password_source = "keychain"` or an env-backed password source means auth resolution worked as
+  intended; do not ask the user for the plaintext password.
+- `summary_available = true` means the helper already gathered balance, account, note, operation,
+  transaction, and sync-summary inputs for the final answer.
+- Placeholder-heavy `getwalletinfo` fields such as `mnemonic_seedfp = "TODO"` or zeroed balances
+  are expected in current alpha builds; use them only as a reachability signal.
+- `recent_transactions` are ordered oldest-to-newest within the returned slice unless you
+  explicitly reverse them before presenting them.
+- Helper and log timestamps are commonly UTC; either convert them to the user's local timezone
+  before presenting them or let the helper do it directly with `--format summary --timezone ...`.
+
+## Helper JSON To Answer Map
+
+When `summary_available = true`, build the wallet-status answer directly from these fields:
+
+- `binary.resolved_path` plus the live process check: report the running binary path.
+- `config.path` and `config.rpc_binds`: report the config path and exposed RPC bind.
+- `binary.supports_rpc_cli`: choose between `zallet rpc` and direct HTTP JSON-RPC in the transport
+  line.
+- `http.client_user`, `http.client_user_inferred`, and `http.password_source`: explain how auth
+  was resolved without asking for plaintext secrets.
+- `log.latest_chain_tip.height`, `log.latest_chain_tip.log_time`, and
+  `log.latest_reached_chain_tip_log_time`: report the sync signal and latest observed height.
+- `wallet.accounts[*].recent_transactions[*].block_datetime`: convert recent activity timestamps
+  to the user's local timezone before presenting them.
+- `wallet.account_count` and `wallet.accounts[*].spendable_balance_zec`: report spendable balance
+  and account inventory.
+- `wallet.accounts[*].known_address_count`: report known address counts when relevant.
+- `wallet.note_counts`: report note counts by pool.
+- `wallet.operation_ids`: report pending async operations or explicitly say there are none.
+- `wallet.accounts[*].recent_transactions`: report recent activity, noting that the helper returns
+  each slice oldest-to-newest.
+- `http.probe.rpc_result`: treat `getwalletinfo` as a reachability signal only when it is
+  placeholder-heavy.
+
+For direct helper-rendered summaries, `--format summary` already applies this mapping and can
+render localized timestamps with `--timezone`.
 
 ## Parameter Encoding Rule
 
@@ -80,6 +242,39 @@ For direct HTTP transport, call the same method names through a JSON-RPC POST bo
 - Treat `getwalletinfo` as a partial state signal; fields like `unlocked_until` can still be
   useful even when the rest of the payload is placeholder-heavy.
 
+## Compact Wallet Status Template
+
+A good wallet-status answer should cover:
+
+- live process and resolved binary path
+- datadir, config path, and transport used
+- sync signal from `zallet.log`, with timestamps rendered in the user's local timezone
+- spendable balance, account inventory, note counts, and pending async operations
+- recent transaction activity in local time
+- alpha caveat when `getwalletinfo` is placeholder-heavy
+
+Prefer a short paragraph or short flat list over a long narrative. Canonical compact phrasing:
+
+```text
+Wallet status looks healthy.
+
+A live process is running from /path/to/zallet against datadir /path/to/datadir. JSON-RPC on
+HOST:PORT was checked over TRANSPORT as USERNAME via AUTH_SOURCE.
+
+Sync looks current: latest observed tip was HEIGHT at LOCAL_TIME, and the wallet logged reaching
+chain tip at LOCAL_TIME. Spendable balance is AMOUNT ZEC across N account(s), with NOTE_COUNTS
+and no pending async operations.
+
+Recent activity (local time, oldest to newest):
+- LOCAL_TIME: received AMOUNT ZEC
+- LOCAL_TIME: sent AMOUNT ZEC
+
+Alpha caveat: `getwalletinfo` is still placeholder-heavy in this build, so balance and activity
+were summarized from the helper's richer status fields instead.
+```
+
+`check_wallet_status.py --format summary --timezone local` can emit nearly this shape directly.
+
 ## Example Commands
 
 List accounts including known addresses:
@@ -118,4 +313,24 @@ python3 scripts/check_wallet_status.py \
   --datadir /absolute/path/to/datadir \
   --http-user "${RPC_USER}" \
   --http-password-env ZALLET_RPC_PASSWORD
+```
+
+Equivalent Keychain-backed check on macOS:
+
+```bash
+python3 scripts/check_wallet_status.py \
+  --binary /path/to/zallet \
+  --datadir /absolute/path/to/datadir \
+  --http-user "${RPC_USER}" \
+  --http-password-keychain-service zallet-rpc
+```
+
+Equivalent Keychain-backed check with JSON output for machine consumption:
+
+```bash
+python3 scripts/check_wallet_status.py \
+  --binary /path/to/zallet \
+  --datadir /absolute/path/to/datadir \
+  --http-password-keychain-service zallet-rpc \
+  --format json
 ```
