@@ -7,11 +7,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shlex
-import subprocess
 import sys
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from zallet_rpc_util import binary_supports_rpc
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,23 +94,6 @@ def load_params(args: argparse.Namespace) -> list[object]:
         raise ValueError("parameter input must decode to a JSON array")
 
     return params
-
-
-def binary_supports_rpc(binary: str) -> bool:
-    try:
-        result = subprocess.run(
-            [binary, "--help"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return False
-
-    help_text = (result.stdout or "") + "\n" + (result.stderr or "")
-    return re.search(r"^\s+rpc\s+", help_text, re.MULTILINE) is not None
-
-
 def choose_transport(args: argparse.Namespace) -> str:
     if args.transport in ("cli", "http"):
         return args.transport

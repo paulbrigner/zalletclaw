@@ -8,9 +8,13 @@ management once a wallet is running.
 - Run `zallet --help` before assuming the `rpc` subcommand exists.
 - Use `zallet rpc ...` when the binary exposes the `rpc` subcommand.
 - Use direct HTTP JSON-RPC against the configured `rpc.bind` address when the binary does not.
+- Use `scripts/check_wallet_status.py` when you need a deterministic check of binary features,
+  config paths, auth shape, and live HTTP reachability.
 - Expect `401 Unauthorized` when the server requires Basic auth and no credentials are supplied.
 - Remember that `zallet.toml` usually stores only a password hash, so the agent cannot recover
   the plaintext RPC password.
+- Remember that the optional CLI RPC client can only auto-auth from a plaintext `password`
+  config entry; a `pwhash` entry is sufficient for the server but not for client auto-auth.
 
 ## Connection Preconditions
 
@@ -18,6 +22,16 @@ management once a wallet is running.
 - Ensure the config enables at least one `rpc.bind` address.
 - Ensure auth is configured if the wallet expects it.
 - Use `--timeout` on `zallet rpc` when a request may run longer than the default 900 seconds.
+
+## Auth Handling
+
+- Prefer environment-backed credentials for direct HTTP requests.
+- Do not inline plaintext RPC passwords into reusable scripts, committed files, or long-lived
+  shell history.
+- If the user needs to troubleshoot auth, ask for the username and redacted config shape, not the
+  password itself.
+- If the wallet only has `pwhash` auth entries, treat HTTP JSON-RPC with env-backed credentials as
+  the primary transport.
 
 ## Parameter Encoding Rule
 
@@ -44,6 +58,7 @@ For direct HTTP transport, call the same method names through a JSON-RPC POST bo
 
 - Use `z_listaccounts` and `z_getaccount` for account inventory.
 - Use `z_getaddressforaccount`, `listaddresses`, and `z_listunifiedreceivers` for address work.
+- Use `validateaddress` for transparent-address validation.
 - Use `z_getbalances`, `z_gettotalbalance`, `z_listunspent`, and `z_getnotescount` for wallet
   balance and spendability checks.
 - Use `z_listtransactions`, `z_viewtransaction`, `getrawtransaction`, and `decoderawtransaction`
@@ -56,6 +71,14 @@ For direct HTTP transport, call the same method names through a JSON-RPC POST bo
 - Use `z_getoperationstatus` to inspect an operation without removing it from memory.
 - Use `z_getoperationresult` to fetch the final result and remove finished operations.
 - Prefer polling an existing operation over resubmitting a send.
+
+## Alpha Sharp Edges
+
+- Expect some inspection RPCs to be incomplete or buggy while Zallet is alpha.
+- If `z_viewtransaction` fails after a completed send, fall back to the async operation result,
+  `z_listtransactions`, and balance deltas before concluding the send failed.
+- Treat `getwalletinfo` as a partial state signal; fields like `unlocked_until` can still be
+  useful even when the rest of the payload is placeholder-heavy.
 
 ## Example Commands
 
@@ -85,4 +108,14 @@ curl -sS \
   -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"z_getoperationstatus","params":[["OPERATION_ID"]]}' \
   "${ZALLET_RPC_URL}"
+```
+
+Check local binary, config, and auth status:
+
+```bash
+python3 scripts/check_wallet_status.py \
+  --binary /path/to/zallet \
+  --datadir /absolute/path/to/datadir \
+  --http-user "${RPC_USER}" \
+  --http-password-env ZALLET_RPC_PASSWORD
 ```

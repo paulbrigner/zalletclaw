@@ -10,6 +10,8 @@ Switch to guidance mode for any step that touches wallet secrets.
   operations on the user's behalf.
 - Provide the exact command, explain the prompt, and wait for the user to confirm completion.
 - Ask for redacted output only when it is strictly needed.
+- Do not suggest storing a plaintext RPC password in a committed config file just to make
+  `zallet rpc` auto-auth work.
 
 ## Safe Wallet Setup Pattern
 
@@ -64,6 +66,16 @@ If a send requires an unlocked wallet:
 - tell the user why the wallet needs to be unlocked
 - ask the user to unlock it locally with a method they trust
 - continue only after they confirm the wallet is unlocked
+
+## RPC Password Hygiene
+
+- If the user needs direct HTTP JSON-RPC, prefer a temporary environment variable in their local
+  shell over editing `zallet.toml` to add a plaintext `password` field.
+- If they only have `pwhash` in config, explain that this is expected and preferable for server
+  verification.
+- If they need the optional CLI RPC client, explain that it may require a plaintext `password`
+  entry for config-based auto-auth, which is a convenience tradeoff rather than the preferred
+  default.
 
 ## What to Request Back
 

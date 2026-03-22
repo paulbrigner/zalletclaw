@@ -18,6 +18,8 @@ Primary source of truth:
 
 ## Workflow Decision Tree
 
+- Use [references/account-model.md](references/account-model.md) when the user is asking
+  conceptual wallet questions about accounts, addresses, diversifiers, change, or privacy.
 - Use [references/manual-secret-ops.md](references/manual-secret-ops.md) when the task touches
   mnemonic material, wallet encryption secrets, RPC unlock passphrases, or any other sensitive
   wallet secret.
@@ -34,6 +36,9 @@ Use this skill for prompts such as:
 
 - `Show me how to generate a Zallet config for this datadir.`
 - `Help me inspect balances and accounts in my local Zallet wallet.`
+- `Why does this wallet show so many known addresses?`
+- `Explain what this account UUID, seedfp, or diversifier index means.`
+- `What kind of Zcash address is this?`
 - `Explain why this zallet rpc call is failing.`
 - `Build the right z_sendmany command for these recipients.`
 - `I need to import or export a mnemonic from Zallet.`
@@ -64,6 +69,10 @@ Use this skill for prompts such as:
 - Use the helper script at `scripts/build_rpc_command.py` when shell quoting for JSON-RPC
   parameters is error-prone or when you need to choose between the `rpc` CLI subcommand and
   direct HTTP transport.
+- Use `scripts/check_wallet_status.py` when the user is confused about binary features, config
+  paths, RPC reachability, or auth shape.
+- Use `scripts/send_preflight.py` when you need a deterministic send summary before asking for
+  confirmation.
 - Use absolute datadir paths when passing `--datadir`.
 - Remember that relative config paths are resolved under the datadir.
 
@@ -78,6 +87,8 @@ Use this skill for prompts such as:
 
 ## Example Routing
 
+- If the user asks what an account, address, or diversifier means, use
+  [references/account-model.md](references/account-model.md) before answering.
 - If the user asks to create or import wallet secret material, switch to guidance mode and use
   [references/manual-secret-ops.md](references/manual-secret-ops.md).
 - If the user asks to inspect wallet state, use [references/rpc.md](references/rpc.md) and favor
@@ -87,8 +98,11 @@ Use this skill for prompts such as:
 
 ## Resources
 
+- [references/account-model.md](references/account-model.md)
 - [references/cli.md](references/cli.md)
 - [references/rpc.md](references/rpc.md)
 - [references/manual-secret-ops.md](references/manual-secret-ops.md)
 - [references/send-flows.md](references/send-flows.md)
 - `scripts/build_rpc_command.py`
+- `scripts/check_wallet_status.py`
+- `scripts/send_preflight.py`

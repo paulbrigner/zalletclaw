@@ -13,6 +13,9 @@ Use this workflow for every send request.
 - Confirm the wallet is unlocked if spending requires private key access.
 - Confirm the privacy policy the user accepts.
 
+When possible, generate the preflight summary with `scripts/send_preflight.py` instead of doing
+the entire checklist ad hoc in prose.
+
 ## Construction Rules
 
 - Use `z_sendmany` for sends.
@@ -59,6 +62,17 @@ If the binary has the `rpc` subcommand, the helper emits `zallet rpc ...`. Other
 direct `curl` JSON-RPC request against the configured RPC server. Inspect the emitted command
 before execution.
 
+Prefer the deterministic preflight helper before execution:
+
+```bash
+python3 scripts/send_preflight.py \
+  --datadir /absolute/path/to/datadir \
+  --http-user "${RPC_USER}" \
+  --http-password-env ZALLET_RPC_PASSWORD \
+  --from "ACCOUNT_NAME_OR_UUID_OR_ADDRESS" \
+  --recipients-json '[{"address":"RECIPIENT_ADDRESS","amount":"0.01000000"}]'
+```
+
 ## Require Explicit Confirmation
 
 Restate the send in plain language before running it:
@@ -89,4 +103,6 @@ zallet rpc z_getoperationstatus '["OPERATION_ID"]'
 
 - Inspect the final operation result.
 - Use `z_viewtransaction`, `z_listtransactions`, or balance methods to confirm expected state.
+- If `z_viewtransaction` fails in an alpha build, rely on the completed operation result and
+  balance delta before retrying or resubmitting.
 - Prefer inspection over retrying when anything is ambiguous.
