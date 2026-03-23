@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import platform
 import re
 import subprocess
 from pathlib import Path
@@ -18,6 +19,8 @@ try:
     import tomllib  # type: ignore[attr-defined]
 except ModuleNotFoundError:
     tomllib = None  # type: ignore[assignment]
+
+DEFAULT_MACOS_KEYCHAIN_SERVICE = "zallet-rpc"
 
 
 def binary_supports_rpc(binary: str) -> bool:
@@ -153,14 +156,23 @@ def lookup_keychain_password(
     return None, error_text
 
 
+def default_keychain_service() -> str | None:
+    return DEFAULT_MACOS_KEYCHAIN_SERVICE if platform.system() == "Darwin" else None
+
+
 def resolve_http_password(
     password_env: str | None = None,
     keychain_service: str | None = None,
     keychain_account: str | None = None,
     default_keychain_account: str | None = None,
+    auto_keychain: bool = True,
 ) -> dict[str, Any]:
+    effective_keychain_service = keychain_service
+    if effective_keychain_service is None and auto_keychain and default_keychain_account:
+        effective_keychain_service = default_keychain_service()
+
     effective_keychain_account = (
-        keychain_account or default_keychain_account if keychain_service else None
+        keychain_account or default_keychain_account if effective_keychain_service else None
     )
 
     password = None
@@ -176,10 +188,10 @@ def resolve_http_password(
             password = os.environ[password_env]
             source = "env"
 
-    if password is None and keychain_service:
+    if password is None and effective_keychain_service:
         keychain_checked = True
         password, keychain_error = lookup_keychain_password(
-            keychain_service,
+            effective_keychain_service,
             effective_keychain_account,
         )
         keychain_password_present = password is not None
@@ -191,7 +203,7 @@ def resolve_http_password(
         "source": source,
         "env_name": password_env,
         "env_present": env_present,
-        "keychain_service": keychain_service,
+        "keychain_service": effective_keychain_service,
         "keychain_account": effective_keychain_account,
         "keychain_checked": keychain_checked,
         "keychain_password_present": keychain_password_present,

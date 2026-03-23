@@ -58,10 +58,12 @@ Do these steps in order before making any claim about wallet state:
 2. Discover a live `zallet ... start` process with `ps` before checking any subcommand support.
 3. Prefer helper-assisted discovery over manual spelunking:
    - use `scripts/check_wallet_status.py --format json` first when you need the live datadir,
-     inferred RPC user, or auth reachability
+     inferred RPC user, auth reachability, or a compact wallet summary
+   - on macOS, let the helpers try the default `zallet-rpc` Keychain item automatically before
+     you start opening config files or asking follow-up questions
    - use `scripts/send_preflight.py` next; it can auto-discover the live datadir when `--datadir`
-     and `--config` are omitted, and it can infer the sole RPC user from config when `--http-user`
-     is omitted
+     and `--config` are omitted, infer the sole RPC user when `--http-user` is omitted, and
+     auto-select the sole account when `--from` is omitted
 4. Use `scripts/send_preflight.py` or the documented RPC path to validate balance, source,
    recipients, and auth.
 5. Restate one clean confirmation summary.
@@ -77,6 +79,9 @@ Hard guardrails:
   Check `zallet --help` or the local repo before assuming a subcommand exists.
 - Do not jump from one failed probe to `RPC not responding` unless you have already resolved the
   live wallet context or exhausted the documented auth/transport fallbacks.
+- Do not narrate scratch debugging to the user while you are still resolving the flow. Keep the
+  user-facing output to the preflight summary, confirmation request, and validated execution
+  updates.
 - For direct send requests, do not turn the task into a menu of speculative questions when the
   preflight helper or documented process-discovery steps can answer them.
 
@@ -228,6 +233,11 @@ Required behavior for wallet-status prompts:
   methods when required fields are missing or the result appears inconsistent.
 - Use `scripts/send_preflight.py` when you need a deterministic send summary before asking for
   confirmation.
+- For direct sends with no source specified, prefer `scripts/send_preflight.py` without `--from`
+  first; it now auto-selects the sole account or fails cleanly when the wallet has multiple
+  accounts.
+- On macOS, prefer helper auto-auth before ad hoc `security` commands; the helpers now try the
+  default `zallet-rpc` Keychain service automatically when they know the RPC user.
 - Use absolute datadir paths when passing `--datadir`.
 - Remember that relative config paths are resolved under the datadir.
 
@@ -256,6 +266,8 @@ Additional hard guardrails for weaker models:
   the confirmation request, and the validated execution/result updates.
 - If `rg` or `lsof` is unavailable, do not stall on tool troubleshooting. Fall back to plain `ps`,
   nearby checkout discovery, or the helper scripts.
+- Prefer a single helper-first path over branching exploration: `check_wallet_status.py` to
+  discover context, then `send_preflight.py` to produce the exact confirmation summary.
 
 Required execution rules:
 

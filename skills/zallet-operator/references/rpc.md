@@ -47,6 +47,8 @@ management once a wallet is running.
 - If the wallet only has `pwhash` auth entries, treat HTTP JSON-RPC with a local secret store or
   env-backed credentials as the primary transport.
 - The helper scripts resolve passwords in this order: env var first, then Keychain.
+- On macOS, when the helper knows the RPC username and you did not specify another Keychain item,
+  it automatically tries the default `zallet-rpc` Keychain service.
 - For wallet-status checks, if an initial unauthenticated probe returns `401 Unauthorized`, retry
   immediately with Keychain on macOS or an env-backed password before concluding the wallet is
   unreachable.
@@ -79,13 +81,13 @@ lsof -a -p PID -d cwd,txt -Fn
 ```
 
 Run the status helper with the discovered binary and datadir. If the config has a single
-`[[rpc.auth]]` user, the helper will infer it automatically:
+`[[rpc.auth]]` user, the helper will infer it automatically and, on macOS, it will also try the
+standard `zallet-rpc` Keychain item automatically:
 
 ```bash
 python3 scripts/check_wallet_status.py \
   --binary /path/to/zallet \
-  --datadir /absolute/path/to/datadir \
-  --http-password-keychain-service zallet-rpc
+  --datadir /absolute/path/to/datadir
 ```
 
 If the first probe shows `401 Unauthorized`, keep the same command and let the helper resolve the

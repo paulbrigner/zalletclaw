@@ -8,12 +8,13 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
+from pathlib import Path
 import re
 import shlex
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -33,14 +34,22 @@ from zallet_rpc_util import (
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 CHAIN_TIP_RE = re.compile(r"New chain tip:\s+(?P<height>\d+)\s+(?P<hash>[0-9a-fA-F]+)")
+MAX_DISCOVERY_DEPTH = 5
+DISCOVERY_ROOT_NAMES = ("dev", "src", "code", "projects", "work")
+DISCOVERY_SKIP_DIRS = {".git", "node_modules", ".cache", "Library", "Applications", "Movies", "Music", "Pictures"}
 
 
-def parse_ps_command(line: str) -> str | None:
+def parse_ps_line(line: str) -> tuple[int | None, str | None]:
     parts = line.strip().split(None, 10)
     if len(parts) < 11:
-        return None
+        return None, None
 
-    return parts[10]
+    try:
+        pid = int(parts[1])
+    except ValueError:
+        pid = None
+
+    return pid, parts[10]
 
 
 def extract_datadir_from_argv(argv: list[str]) -> str | None:
@@ -51,6 +60,122 @@ def extract_datadir_from_argv(argv: list[str]) -> str | None:
             return token.split("=", 1)[1]
 
     return None
+
+
+def _candidate_search_roots(binary: str, argv: list[str]) -> list[Path]:
+    roots: list[Path] = []
+
+    def add(path: Path | None) -> None:
+        if path is None:
+            return
+        expanded = path.expanduser()
+        if not expanded.exists():
+            return
+        resolved = expanded.resolve()
+        if resolved not in roots:
+            roots.append(resolved)
+
+    home = Path.home()
+    add(Path.cwd())
+    add(home)
+    for name in DISCOVERY_ROOT_NAMES:
+        add(home / name)
+
+    add(SCRIPT_DIR)
+    for parent in SCRIPT_DIR.parents[:4]:
+        add(parent)
+
+    binary_path = Path(binary).expanduser()
+    if binary_path.is_absolute():
+        add(binary_path.parent)
+        add(binary_path.parent.parent)
+
+    for token in argv[1:]:
+        if token.startswith("-"):
+            continue
+        token_path = Path(token).expanduser()
+        if token_path.is_absolute():
+            add(token_path)
+            add(token_path.parent)
+
+    return roots
+
+
+def _iter_named_dirs(root: Path, target_name: str, max_depth: int) -> list[Path]:
+    candidates: list[Path] = []
+    try:
+        for current_root, dirnames, _ in os.walk(root, topdown=True):
+            current_path = Path(current_root)
+            try:
+                depth = len(current_path.relative_to(root).parts)
+            except ValueError:
+                depth = max_depth + 1
+
+            dirnames[:] = [
+                name
+                for name in dirnames
+                if name not in DISCOVERY_SKIP_DIRS and not (name.startswith(".") and name != target_name)
+            ]
+
+            if depth >= max_depth:
+                dirnames[:] = []
+
+            if target_name in dirnames:
+                candidates.append(current_path / target_name)
+    except OSError:
+        return candidates
+
+    return candidates
+
+
+def _score_datadir_candidate(candidate: Path) -> tuple[int, float]:
+    score = 0
+    if (candidate / "zallet.toml").exists():
+        score += 5
+    if (candidate / "zallet.log").exists():
+        score += 3
+    if candidate.parent.name.lower() == "zallet":
+        score += 4
+    if "zallet" in str(candidate.parent).lower():
+        score += 2
+
+    newest_mtime = 0.0
+    for probe in (candidate, candidate / "zallet.toml", candidate / "zallet.log"):
+        try:
+            newest_mtime = max(newest_mtime, probe.stat().st_mtime)
+        except OSError:
+            continue
+
+    return score, newest_mtime
+
+
+def resolve_relative_live_datadir(datadir: str, binary: str, argv: list[str]) -> str | None:
+    relative_path = Path(datadir).expanduser()
+    if relative_path.is_absolute():
+        return str(relative_path.resolve(strict=False))
+
+    roots = _candidate_search_roots(binary, argv)
+    target_name = relative_path.name
+    suffix_parts = relative_path.parts
+    candidates: list[Path] = []
+
+    for root in roots:
+        for named_dir in _iter_named_dirs(root, target_name, MAX_DISCOVERY_DEPTH):
+            candidate = named_dir
+            if len(suffix_parts) > 1:
+                try:
+                    if named_dir.parts[-len(suffix_parts):] != suffix_parts:
+                        continue
+                except IndexError:
+                    continue
+            candidates.append(candidate.resolve(strict=False))
+
+    if not candidates:
+        return None
+
+    ranked = sorted({candidate for candidate in candidates}, key=_score_datadir_candidate, reverse=True)
+    best = ranked[0]
+    return str(best)
 
 
 def discover_live_wallet_process() -> dict[str, object] | None:
@@ -65,7 +190,7 @@ def discover_live_wallet_process() -> dict[str, object] | None:
         return None
 
     for line in (result.stdout or "").splitlines():
-        command = parse_ps_command(line)
+        pid, command = parse_ps_line(line)
         if not command or "zallet" not in command or " start" not in command:
             continue
 
@@ -92,8 +217,13 @@ def discover_live_wallet_process() -> dict[str, object] | None:
                 resolved_datadir = datadir_path.resolve(strict=False)
             elif binary_path.is_absolute():
                 resolved_datadir = (resolved_binary.parent / datadir_path).resolve(strict=False)
+            else:
+                guessed = resolve_relative_live_datadir(datadir, binary, argv)
+                if guessed:
+                    resolved_datadir = Path(guessed)
 
         return {
+            "pid": pid,
             "command": command,
             "argv": argv,
             "binary": str(resolved_binary) if binary_path.is_absolute() else binary,
@@ -122,7 +252,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--http-password-keychain-account",
-        help="macOS Keychain account name. Defaults to --http-user when omitted.",
+        help="macOS Keychain account name. Defaults to --http-user.",
     )
     parser.add_argument(
         "--probe-method",

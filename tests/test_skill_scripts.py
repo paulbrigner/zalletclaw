@@ -8,6 +8,7 @@ import textwrap
 import unittest
 from unittest import mock
 from pathlib import Path
+import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -132,6 +133,19 @@ class SharedUtilTests(unittest.TestCase):
         self.assertEqual(result["password"], "keychain-secret")
         mocked_lookup.assert_called_once_with("zallet-rpc", "alice")
 
+    def test_resolve_http_password_auto_uses_default_macos_keychain_service(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with mock.patch.object(zallet_rpc_util.platform, "system", return_value="Darwin"), mock.patch.object(
+                zallet_rpc_util,
+                "lookup_keychain_password",
+                return_value=("keychain-secret", None),
+            ) as mocked_lookup:
+                result = zallet_rpc_util.resolve_http_password(default_keychain_account="alice")
+
+        self.assertEqual(result["source"], "keychain")
+        self.assertEqual(result["keychain_service"], "zallet-rpc")
+        mocked_lookup.assert_called_once_with("zallet-rpc", "alice")
+
 
 class CheckWalletStatusTests(unittest.TestCase):
     def test_infer_http_user_from_sole_auth_entry(self) -> None:
@@ -147,6 +161,21 @@ class CheckWalletStatusTests(unittest.TestCase):
 
         assert discovered is not None
         self.assertEqual(discovered["binary"], "/Users/paul/dev/zallet/zallet")
+        self.assertEqual(discovered["datadir"], "/Users/paul/dev/zallet/.zallet")
+
+    def test_discover_live_wallet_process_resolves_relative_datadir_via_search(self) -> None:
+        ps_output = """USER PID %CPU %MEM VSZ RSS TTY STAT STARTED TIME COMMAND\npaul 30617 0.1 0.2 123 456 ?? SN 9:30PM 0:01 zallet -d .zallet start\n"""
+        completed = subprocess.CompletedProcess(args=["ps", "aux"], returncode=0, stdout=ps_output, stderr="")
+
+        with mock.patch.object(check_wallet_status.subprocess, "run", return_value=completed), mock.patch.object(
+            check_wallet_status,
+            "resolve_relative_live_datadir",
+            return_value="/Users/paul/dev/zallet/.zallet",
+        ):
+            discovered = check_wallet_status.discover_live_wallet_process()
+
+        assert discovered is not None
+        self.assertEqual(discovered["binary"], "zallet")
         self.assertEqual(discovered["datadir"], "/Users/paul/dev/zallet/.zallet")
 
     def test_build_status_auto_discovers_binary_and_datadir(self) -> None:
@@ -586,6 +615,75 @@ class SendPreflightTests(unittest.TestCase):
         self.assertEqual(report["source"]["from_address"], "u1source")
         self.assertTrue(any("Auto-discovered live wallet datadir" in note for note in report["notes"]))
         self.assertTrue(any("Inferred sole RPC user" in note for note in report["notes"]))
+
+    def test_build_report_auto_selects_sole_account_when_from_is_omitted(self) -> None:
+        args = argparse.Namespace(
+            datadir="/Users/paul/dev/zallet/.zallet",
+            config=None,
+            http_url=None,
+            http_user=None,
+            http_password_env=None,
+            http_password_keychain_service=None,
+            http_password_keychain_account=None,
+            timeout=5,
+            minconf=1,
+            source_identifier=None,
+            recipients_json='[{"address":"u1recipient","amount":"0.001"}]',
+            recipients_file=None,
+            privacy_policy="FullPrivacy",
+            format="json",
+        )
+
+        with mock.patch.object(
+            send_preflight,
+            "load_toml_file",
+            return_value={"rpc": {"bind": "127.0.0.1:28232", "auth": [{"user": "localcheck", "pwhash": "abc"}]}}
+        ), mock.patch.object(
+            send_preflight,
+            "json_rpc_request",
+        ) as mocked_rpc:
+            def fake_json_rpc_request(url, method, params, timeout, user, password):
+                self.assertEqual(user, "localcheck")
+                if method == "z_listaccounts":
+                    return {
+                        "transport_error": None,
+                        "rpc_error": None,
+                        "rpc_result": [
+                            {
+                                "account_uuid": "uuid-1",
+                                "name": "main",
+                                "addresses": [{"ua": "u1source", "diversifier_index": 1}],
+                            }
+                        ],
+                    }
+                if method == "z_getbalances":
+                    return {
+                        "transport_error": None,
+                        "rpc_error": None,
+                        "rpc_result": {
+                            "accounts": [
+                                {"account_uuid": "uuid-1", "total": {"spendable": {"valueZat": 200000}}}
+                            ]
+                        },
+                    }
+                if method == "z_listoperationids":
+                    return {"transport_error": None, "rpc_error": None, "rpc_result": []}
+                if method == "getwalletinfo":
+                    return {"transport_error": None, "rpc_error": None, "rpc_result": {}}
+                if method == "z_listunifiedreceivers":
+                    return {
+                        "transport_error": None,
+                        "rpc_error": None,
+                        "rpc_result": {"orchard": "addr"},
+                    }
+                raise AssertionError(f"Unexpected method {method}")
+
+            mocked_rpc.side_effect = fake_json_rpc_request
+            report = send_preflight.build_report(args)
+
+        self.assertEqual(report["source"]["resolution"], "auto_account")
+        self.assertEqual(report["source"]["from_address"], "u1source")
+        self.assertTrue(any("Auto-selected the sole account" in note for note in report["notes"]))
 
     def test_parse_recipients_rejects_duplicate_addresses(self) -> None:
         with self.assertRaisesRegex(ValueError, "duplicate recipient address"):

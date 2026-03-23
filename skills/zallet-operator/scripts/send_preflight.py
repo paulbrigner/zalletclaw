@@ -87,8 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--from",
         dest="source_identifier",
-        required=True,
-        help="Source account name, account UUID, or source address.",
+        help="Source account name, account UUID, or source address. If omitted, use the sole account.",
     )
     parser.add_argument("--recipients-json", help="JSON array of recipient objects.")
     parser.add_argument("--recipients-file", help="Path to a JSON file containing recipients.")
@@ -195,7 +194,30 @@ def choose_default_from_address(account: dict[str, Any]) -> tuple[str, str, int 
     raise ValueError("account has no spendable-looking source address")
 
 
-def resolve_source(accounts: list[dict[str, Any]], source_identifier: str) -> dict[str, Any]:
+def _source_payload(account: dict[str, Any], source_identifier: str, resolution: str) -> dict[str, Any]:
+    from_address, address_kind, diversifier_index = choose_default_from_address(account)
+    return {
+        "input": source_identifier,
+        "resolution": resolution,
+        "account_uuid": account.get("account_uuid"),
+        "account_name": account.get("name"),
+        "known_address_count": len(account.get("addresses", [])),
+        "from_address": from_address,
+        "from_address_kind": address_kind,
+        "diversifier_index": diversifier_index,
+    }
+
+
+def resolve_source(accounts: list[dict[str, Any]], source_identifier: str | None) -> tuple[dict[str, Any], list[str]]:
+    notes: list[str] = []
+    if source_identifier is None:
+        if len(accounts) != 1:
+            raise ValueError("--from is required unless the wallet has exactly one account")
+        account = accounts[0]
+        inferred_name = account.get("name") or str(account.get("account_uuid") or "<unknown>")
+        notes.append(f"Auto-selected the sole account as source: {inferred_name}")
+        return _source_payload(account, inferred_name, "auto_account"), notes
+
     named_matches = [
         account
         for account in accounts
@@ -205,18 +227,7 @@ def resolve_source(accounts: list[dict[str, Any]], source_identifier: str) -> di
     if len(named_matches) > 1:
         raise ValueError(f"source identifier is ambiguous: {source_identifier}")
     if len(named_matches) == 1:
-        account = named_matches[0]
-        from_address, address_kind, diversifier_index = choose_default_from_address(account)
-        return {
-            "input": source_identifier,
-            "resolution": "account",
-            "account_uuid": account.get("account_uuid"),
-            "account_name": account.get("name"),
-            "known_address_count": len(account.get("addresses", [])),
-            "from_address": from_address,
-            "from_address_kind": address_kind,
-            "diversifier_index": diversifier_index,
-        }
+        return _source_payload(named_matches[0], source_identifier, "account"), notes
 
     for account in accounts:
         for entry in account.get("addresses", []):
@@ -234,7 +245,7 @@ def resolve_source(accounts: list[dict[str, Any]], source_identifier: str) -> di
                         "from_address": source_identifier,
                         "from_address_kind": field,
                         "diversifier_index": diversifier_index if isinstance(diversifier_index, int) else None,
-                    }
+                    }, notes
 
     raise ValueError(f"could not resolve source account or address: {source_identifier}")
 
@@ -337,7 +348,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(accounts, list):
         raise RpcError("z_listaccounts returned an unexpected shape")
 
-    source = resolve_source(accounts, args.source_identifier)
+    source, source_notes = resolve_source(accounts, args.source_identifier)
+    notes.extend(source_notes)
+
     balances = client.call("z_getbalances", [args.minconf])
     if not isinstance(balances, dict):
         raise RpcError("z_getbalances returned an unexpected shape")

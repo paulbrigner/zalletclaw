@@ -10,9 +10,12 @@ For prompts like `send 0.001 ZEC to ...`, do not improvise. Use this opening seq
 2. resolve the running binary path and datadir
 3. prefer the helper path instead of manual filesystem spelunking:
    - run `scripts/check_wallet_status.py --format json` when you need the live datadir, inferred
-     RPC user, or auth reachability
+     RPC user, auth reachability, or a compact wallet summary
+   - on macOS, let the helper try the default `zallet-rpc` Keychain item automatically before you
+     branch into manual auth debugging
    - then run `scripts/send_preflight.py`; it can auto-discover the live datadir when `--datadir`
-     and `--config` are omitted, and it can infer the sole RPC user when `--http-user` is omitted
+     and `--config` are omitted, infer the sole RPC user when `--http-user` is omitted, and
+     auto-select the sole account when `--from` is omitted
 4. read or reuse RPC auth details through the documented helper path
 5. run `scripts/send_preflight.py`
 6. present one confirmation summary
@@ -71,7 +74,9 @@ Hard guardrails for smaller models:
 - `--recipients-json` must be raw JSON text, not a path. Use `--recipients-file` when passing a file path.
 - Recipient objects for the preflight helper must use `address`, `amount`, and optional `memo`.
 - The `from` value in the preflight helper may be an account name, account UUID, or address, but the final `z_sendmany` call must use the resolved concrete `from_address`, not the original account name.
+- For direct sends where the user did not specify a source and the wallet has exactly one account, omit `--from` and let the helper auto-select it.
 - Omit `--http-user` when the config has exactly one `[[rpc.auth]]` user and you want the helper to infer it.
+- On macOS, omit explicit Keychain flags first unless you need a non-default item; the helper now tries the default `zallet-rpc` Keychain service automatically when it knows the RPC user.
 - Current alpha builds reject a non-null explicit fee. Use `null` for the fee slot or omit the fee entirely when the transport/method variant supports omission.
 - Do not write one-off Python scratch scripts to discover the final RPC shape after confirmation. Use the documented command shape below or `scripts/build_rpc_command.py`.
 - Do not narrate missing `rg`, missing `lsof`, or other scratch-tool hiccups to the user unless they block the final preflight.
@@ -105,14 +110,18 @@ Prefer the deterministic preflight helper before execution:
 ```bash
 python3 scripts/send_preflight.py \
   --datadir /absolute/path/to/datadir \
-  --http-user "${RPC_USER}" \
-  --http-password-keychain-service zallet-rpc \
   --from "ACCOUNT_NAME_OR_UUID_OR_ADDRESS" \
   --recipients-json '[{"address":"RECIPIENT_ADDRESS","amount":"0.01000000"}]'
 ```
 
 If you already have the preflight output, reuse its resolved `from_address` in the final send.
 Do not rerun ad hoc discovery after the user confirms unless the wallet state changed.
+For a one-account wallet, the shortest safe direct-send preflight is usually:
+
+```bash
+python3 scripts/send_preflight.py \
+  --recipients-json '[{"address":"RECIPIENT_ADDRESS","amount":"0.01000000"}]'
+```
 
 Canonical final `z_sendmany` parameter shape:
 
