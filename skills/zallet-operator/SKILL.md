@@ -205,9 +205,14 @@ Required behavior for wallet-status prompts:
 - Preflight the network, source, recipients, amount, memo handling, balance, and wallet state.
 - Restate the exact send summary before execution.
 - Require explicit user confirmation before sending.
-- Execute the send once.
+- After confirmation, follow the send recipe in [references/send-flows.md](references/send-flows.md) exactly instead of improvising parameters.
+- Use the preflight result to obtain the concrete `from_address`; do not pass an account name directly to `z_sendmany`.
+- When building recipient JSON for `scripts/send_preflight.py`, use the field name `amount`, not `amount_zec`.
+- Remember that `scripts/send_preflight.py` takes `--datadir` or `--config`, not `--binary`.
+- For `z_sendmany`, omit the fee parameter or pass `null`; any other fee value is rejected by current alpha builds.
 - Poll the returned operation ID with `z_getoperationstatus` or `z_getoperationresult`.
 - Verify post-send state with inspection RPCs instead of blindly retrying.
+- Do not narrate scratch debugging or failed intermediate attempts to the user. Present only the preflight summary, the confirmation request, and the validated execution/result updates.
 
 ## Resources
 
