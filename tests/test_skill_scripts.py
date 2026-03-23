@@ -568,6 +568,18 @@ class SendPreflightTests(unittest.TestCase):
             return_value={"rpc": {"bind": "127.0.0.1:28232", "auth": [{"user": "localcheck", "pwhash": "abc"}]}}
         ), mock.patch.object(
             send_preflight,
+            "resolve_http_password",
+            return_value={
+                "source": None,
+                "password": None,
+                "env_present": None,
+                "keychain_service": None,
+                "keychain_account": None,
+                "keychain_password_present": None,
+                "keychain_error": None,
+            },
+        ), mock.patch.object(
+            send_preflight,
             "json_rpc_request",
         ) as mocked_rpc:
             def fake_json_rpc_request(url, method, params, timeout, user, password):
@@ -720,10 +732,11 @@ class SendPreflightTests(unittest.TestCase):
                 "addresses": [{"ua": "u1example", "diversifier_index": 1}],
             }
         ]
-        source = send_preflight.resolve_source(accounts, "main")
+        source, notes = send_preflight.resolve_source(accounts, "main")
         self.assertEqual(source["account_uuid"], "uuid-1")
         self.assertEqual(source["from_address"], "u1example")
         self.assertEqual(source["resolution"], "account")
+        self.assertEqual(notes, [])
 
 
 if __name__ == "__main__":
