@@ -82,7 +82,7 @@ def _candidate_search_roots(binary: str, argv: list[str]) -> list[Path]:
         add(home / name)
 
     add(SCRIPT_DIR)
-    for parent in SCRIPT_DIR.parents[:4]:
+    for parent in list(SCRIPT_DIR.parents)[:4]:
         add(parent)
 
     binary_path = Path(binary).expanduser()
