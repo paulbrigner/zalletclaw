@@ -8,10 +8,15 @@ For prompts like `send 0.001 ZEC to ...`, do not improvise. Use this opening seq
 
 1. discover a live `zallet ... start` process with `ps`
 2. resolve the running binary path and datadir
-3. read or reuse RPC auth details through the documented helper path
-4. run `scripts/send_preflight.py`
-5. present one confirmation summary
-6. execute only after explicit confirmation
+3. prefer the helper path instead of manual filesystem spelunking:
+   - run `scripts/check_wallet_status.py --format json` when you need the live datadir, inferred
+     RPC user, or auth reachability
+   - then run `scripts/send_preflight.py`; it can auto-discover the live datadir when `--datadir`
+     and `--config` are omitted, and it can infer the sole RPC user when `--http-user` is omitted
+4. read or reuse RPC auth details through the documented helper path
+5. run `scripts/send_preflight.py`
+6. present one confirmation summary
+7. execute only after explicit confirmation
 
 Do not open with:
 
@@ -62,12 +67,14 @@ Prefer the helper script to assemble a shell-safe command.
 
 Hard guardrails for smaller models:
 
-- `scripts/send_preflight.py` does not accept `--binary`; use `--datadir` or `--config` plus auth flags.
+- `scripts/send_preflight.py` does not accept `--binary`; use `--datadir` or `--config` when you already know them, or omit both to let the helper auto-discover the live datadir.
 - `--recipients-json` must be raw JSON text, not a path. Use `--recipients-file` when passing a file path.
 - Recipient objects for the preflight helper must use `address`, `amount`, and optional `memo`.
 - The `from` value in the preflight helper may be an account name, account UUID, or address, but the final `z_sendmany` call must use the resolved concrete `from_address`, not the original account name.
+- Omit `--http-user` when the config has exactly one `[[rpc.auth]]` user and you want the helper to infer it.
 - Current alpha builds reject a non-null explicit fee. Use `null` for the fee slot or omit the fee entirely when the transport/method variant supports omission.
 - Do not write one-off Python scratch scripts to discover the final RPC shape after confirmation. Use the documented command shape below or `scripts/build_rpc_command.py`.
+- Do not narrate missing `rg`, missing `lsof`, or other scratch-tool hiccups to the user unless they block the final preflight.
 
 Prefer the helper script to assemble a shell-safe command:
 

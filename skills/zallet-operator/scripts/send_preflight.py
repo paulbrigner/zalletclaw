@@ -16,7 +16,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from check_wallet_status import discover_live_wallet_process, infer_http_user
 from zallet_rpc_util import (
+    extract_rpc_auth,
     extract_rpc_binds,
     infer_http_url,
     json_rpc_request,
@@ -288,8 +290,26 @@ def validate_recipient(client: RpcClient, recipient: dict[str, Any]) -> dict[str
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
-    config_path = resolve_config_path(args.datadir, args.config)
+    datadir = args.datadir
+    config = args.config
+    notes: list[str] = []
+
+    if not datadir and not config:
+        discovered = discover_live_wallet_process()
+        if discovered is not None:
+            discovered_datadir = discovered.get("datadir")
+            if isinstance(discovered_datadir, str) and discovered_datadir:
+                datadir = discovered_datadir
+                notes.append(f"Auto-discovered live wallet datadir: {discovered_datadir}")
+
+    config_path = resolve_config_path(datadir, config)
     config_data = load_toml_file(config_path)
+    auth_entries = extract_rpc_auth(config_data)
+
+    http_user = args.http_user or infer_http_user(auth_entries)
+    if http_user and not args.http_user:
+        notes.append(f"Inferred sole RPC user from config: {http_user}")
+
     http_url = infer_http_url(args.http_url, extract_rpc_binds(config_data))
     if not http_url:
         raise ValueError("could not determine HTTP JSON-RPC URL from args or config")
@@ -298,9 +318,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         password_env=args.http_password_env,
         keychain_service=args.http_password_keychain_service,
         keychain_account=args.http_password_keychain_account,
-        default_keychain_account=args.http_user,
+        default_keychain_account=http_user,
     )
-    if args.http_user and password_info["source"] is None and (
+    if http_user and password_info["source"] is None and (
         args.http_password_env or args.http_password_keychain_service
     ):
         failures = []
@@ -311,7 +331,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             failures.append(f"Keychain lookup failed: {detail}")
         raise ValueError("; ".join(failures))
 
-    client = RpcClient(http_url, args.http_user, password_info["password"], args.timeout)
+    client = RpcClient(http_url, http_user, password_info["password"], args.timeout)
     recipients = parse_recipients(load_recipients_input(args))
     accounts = client.call("z_listaccounts", [True])
     if not isinstance(accounts, list):
@@ -378,13 +398,14 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         },
         "transport": {
             "http_url": http_url,
-            "http_user": args.http_user,
+            "http_user": http_user,
             "password_env": args.http_password_env,
             "password_source": password_info["source"],
             "password_keychain_service": password_info["keychain_service"],
             "password_keychain_account": password_info["keychain_account"],
         },
         "warnings": warnings,
+        "notes": notes,
     }
 
 
@@ -430,6 +451,11 @@ def render_text(report: dict[str, Any]) -> str:
         lines.append("Warnings")
         for warning in report["warnings"]:
             lines.append(f"- {warning}")
+
+    if report.get("notes"):
+        lines.append("Notes")
+        for note in report["notes"]:
+            lines.append(f"- {note}")
 
     return "\n".join(lines)
 

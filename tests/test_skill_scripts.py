@@ -511,6 +511,82 @@ class CheckWalletStatusTests(unittest.TestCase):
 
 
 class SendPreflightTests(unittest.TestCase):
+    def test_build_report_auto_discovers_datadir_and_infers_user(self) -> None:
+        args = argparse.Namespace(
+            datadir=None,
+            config=None,
+            http_url=None,
+            http_user=None,
+            http_password_env=None,
+            http_password_keychain_service=None,
+            http_password_keychain_account=None,
+            timeout=5,
+            minconf=1,
+            source_identifier="main",
+            recipients_json='[{"address":"u1recipient","amount":"0.001"}]',
+            recipients_file=None,
+            privacy_policy="FullPrivacy",
+            format="json",
+        )
+
+        with mock.patch.object(
+            send_preflight,
+            "discover_live_wallet_process",
+            return_value={"datadir": "/Users/paul/dev/zallet/.zallet"},
+        ), mock.patch.object(
+            send_preflight,
+            "load_toml_file",
+            return_value={"rpc": {"bind": "127.0.0.1:28232", "auth": [{"user": "localcheck", "pwhash": "abc"}]}}
+        ), mock.patch.object(
+            send_preflight,
+            "json_rpc_request",
+        ) as mocked_rpc:
+            def fake_json_rpc_request(url, method, params, timeout, user, password):
+                self.assertEqual(url, "http://127.0.0.1:28232")
+                self.assertEqual(user, "localcheck")
+                self.assertIsNone(password)
+                if method == "z_listaccounts":
+                    return {
+                        "transport_error": None,
+                        "rpc_error": None,
+                        "rpc_result": [
+                            {
+                                "account_uuid": "uuid-1",
+                                "name": "main",
+                                "addresses": [{"ua": "u1source", "diversifier_index": 1}],
+                            }
+                        ],
+                    }
+                if method == "z_getbalances":
+                    return {
+                        "transport_error": None,
+                        "rpc_error": None,
+                        "rpc_result": {
+                            "accounts": [
+                                {"account_uuid": "uuid-1", "total": {"spendable": {"valueZat": 200000}}}
+                            ]
+                        },
+                    }
+                if method == "z_listoperationids":
+                    return {"transport_error": None, "rpc_error": None, "rpc_result": []}
+                if method == "getwalletinfo":
+                    return {"transport_error": None, "rpc_error": None, "rpc_result": {}}
+                if method == "z_listunifiedreceivers":
+                    return {
+                        "transport_error": None,
+                        "rpc_error": None,
+                        "rpc_result": {"orchard": "addr"},
+                    }
+                raise AssertionError(f"Unexpected method {method}")
+
+            mocked_rpc.side_effect = fake_json_rpc_request
+            report = send_preflight.build_report(args)
+
+        self.assertEqual(report["transport"]["http_user"], "localcheck")
+        self.assertEqual(report["source"]["from_address"], "u1source")
+        self.assertTrue(any("Auto-discovered live wallet datadir" in note for note in report["notes"]))
+        self.assertTrue(any("Inferred sole RPC user" in note for note in report["notes"]))
+
     def test_parse_recipients_rejects_duplicate_addresses(self) -> None:
         with self.assertRaisesRegex(ValueError, "duplicate recipient address"):
             send_preflight.parse_recipients(

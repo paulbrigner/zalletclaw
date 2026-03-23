@@ -56,7 +56,12 @@ Do these steps in order before making any claim about wallet state:
 
 1. Read [references/send-flows.md](references/send-flows.md).
 2. Discover a live `zallet ... start` process with `ps` before checking any subcommand support.
-3. Resolve the live binary path and datadir from the process or nearby checkout discovery.
+3. Prefer helper-assisted discovery over manual spelunking:
+   - use `scripts/check_wallet_status.py --format json` first when you need the live datadir,
+     inferred RPC user, or auth reachability
+   - use `scripts/send_preflight.py` next; it can auto-discover the live datadir when `--datadir`
+     and `--config` are omitted, and it can infer the sole RPC user from config when `--http-user`
+     is omitted
 4. Use `scripts/send_preflight.py` or the documented RPC path to validate balance, source,
    recipients, and auth.
 5. Restate one clean confirmation summary.
@@ -247,6 +252,10 @@ Additional hard guardrails for weaker models:
 - Do not tell the user the wallet is stopped merely because one guessed binary path or RPC socket
   probe failed.
 - Do not ask the user whether to start the wallet when a live process can be discovered directly.
+- Do not narrate step-by-step scratch debugging to the user. Show only: the preflight summary,
+  the confirmation request, and the validated execution/result updates.
+- If `rg` or `lsof` is unavailable, do not stall on tool troubleshooting. Fall back to plain `ps`,
+  nearby checkout discovery, or the helper scripts.
 
 Required execution rules:
 
