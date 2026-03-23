@@ -1,4 +1,4 @@
 interface:
   display_name: "Zallet Operator"
   short_description: "Guide Zallet CLI, RPC, and guarded sends"
-  default_prompt: "Use $zallet_operator to help me operate Zallet via CLI and JSON-RPC, including guarded send flows."
+  default_prompt: "Use $zallet_operator to help me operate Zallet via CLI and JSON-RPC. For send requests, first discover the live wallet process and datadir, then run the guarded preflight flow before any confirmation or execution."

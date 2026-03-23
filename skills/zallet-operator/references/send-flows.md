@@ -2,6 +2,24 @@
 
 Use this workflow for every send request.
 
+## First 60 Seconds
+
+For prompts like `send 0.001 ZEC to ...`, do not improvise. Use this opening sequence:
+
+1. discover a live `zallet ... start` process with `ps`
+2. resolve the running binary path and datadir
+3. read or reuse RPC auth details through the documented helper path
+4. run `scripts/send_preflight.py`
+5. present one confirmation summary
+6. execute only after explicit confirmation
+
+Do not open with:
+
+- `which zallet`
+- guessed top-level commands like `zallet balance`
+- a raw RPC socket probe before discovering the live datadir and auth path
+- a claim that the wallet is not running just because the binary is not in PATH
+
 ## Preflight Checklist
 
 - Confirm the target network and datadir.
@@ -139,6 +157,8 @@ Run the send only after the user gives an explicit confirmation.
 Bad execution pattern:
 
 - tell the user about each failed scratch attempt
+- treat `zallet: command not found` as proof the wallet is stopped
+- invent a nonexistent top-level command such as `zallet balance`
 - pass the account name directly to `z_sendmany`
 - discover after confirmation that the helper uses `amount` instead of `amount_zec`
 - discover after confirmation that `--recipients-json` expects inline JSON instead of a file path

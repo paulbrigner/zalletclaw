@@ -49,6 +49,32 @@ Use this skill for prompts such as:
 - `I need to import or export a mnemonic from Zallet.`
 - `Help me poll a pending Zallet operation ID.`
 
+## Small-Model Guardrails For Send Requests
+
+When the user says anything like `send 0.001 ZEC to ...`, treat it as a guarded send flow immediately.
+Do these steps in order before making any claim about wallet state:
+
+1. Read [references/send-flows.md](references/send-flows.md).
+2. Discover a live `zallet ... start` process with `ps` before checking any subcommand support.
+3. Resolve the live binary path and datadir from the process or nearby checkout discovery.
+4. Use `scripts/send_preflight.py` or the documented RPC path to validate balance, source,
+   recipients, and auth.
+5. Restate one clean confirmation summary.
+6. Wait for explicit confirmation before executing the send.
+
+Hard guardrails:
+
+- Do not treat `zallet: command not found` as evidence that the wallet is not running.
+  It only means the binary is not in the current PATH.
+- Do not claim `The wallet isn't running` unless `ps` shows no live `zallet ... start` process
+  after reasonable discovery.
+- Do not invent top-level CLI commands such as `zallet balance`.
+  Check `zallet --help` or the local repo before assuming a subcommand exists.
+- Do not jump from one failed probe to `RPC not responding` unless you have already resolved the
+  live wallet context or exhausted the documented auth/transport fallbacks.
+- For direct send requests, do not turn the task into a menu of speculative questions when the
+  preflight helper or documented process-discovery steps can answer them.
+
 ## Grounding Rules
 
 - Read the local Zallet docs or source when method or command behavior is unclear.
@@ -201,6 +227,28 @@ Required behavior for wallet-status prompts:
 - Remember that relative config paths are resolved under the datadir.
 
 ## Guarded Send Mode
+
+For any direct send request, follow this exact operator rhythm:
+
+1. discover the live wallet process
+2. resolve the binary path and datadir
+3. run the deterministic preflight
+4. restate the exact send summary
+5. require explicit confirmation
+6. execute once
+7. poll and verify
+
+Additional hard guardrails for weaker models:
+
+- Do not start with `which zallet` as the deciding check. A live wallet process matters more than
+  PATH.
+- Do not attempt ad hoc commands like `zallet balance`; use the documented RPC methods and helper
+  scripts instead.
+- Do not tell the user the wallet is stopped merely because one guessed binary path or RPC socket
+  probe failed.
+- Do not ask the user whether to start the wallet when a live process can be discovered directly.
+
+Required execution rules:
 
 - Preflight the network, source, recipients, amount, memo handling, balance, and wallet state.
 - Restate the exact send summary before execution.
