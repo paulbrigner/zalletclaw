@@ -1,7 +1,6 @@
 ---
 name: zallet_operator
-description: "Operate the local Zallet Zcash CLI wallet through its CLI and JSON-RPC interfaces. Use when the agent needs to explain or run `zallet` commands, generate or troubleshoot `zallet.toml`, start a wallet, add RPC auth, inspect accounts, addresses, balances, transactions, or async operations, hand mnemonic or other secret-sensitive wallet steps back to the user with exact CLI guidance, or prepare and execute guarded `z_sendmany` send flows with explicit preflight and confirmation."
-metadata: {"openclaw":{"os":["darwin","linux"],"requires":{"bins":["python3"]}}}
+description: "Operate the local Zallet Zcash CLI wallet through its CLI and JSON-RPC interfaces. Use when the agent needs to explain or run `zallet` commands, generate or troubleshoot `zallet.toml`, start a wallet, add RPC auth, check whether a wallet is running, synced, funded, idle, or has recent activity, inspect accounts, addresses, balances, transactions, or async operations, hand mnemonic or other secret-sensitive wallet steps back to the user with exact CLI guidance, or prepare and execute guarded `z_sendmany` send flows with explicit preflight and confirmation."
 ---
 
 # Zallet Operator
@@ -82,27 +81,34 @@ Use this skill for prompts such as:
 When the user asks for wallet status, answer from multiple signals instead of relying on
 `getwalletinfo` alone.
 
+Do not treat a missing `.zallet` directory in the current workspace as evidence that the wallet is
+missing, stopped, or uninitialized. A running `zallet -d .zallet start` process may have been
+launched from a different current working directory, so first resolve the live process cwd and the
+explicit datadir before making any claim about where the wallet lives.
+
 Operator recipe:
 
 1. Find a live `zallet ... start` process and resolve its binary path and datadir.
 2. If the process metadata is incomplete, keep going: infer the datadir from explicit `-d` or
    `--datadir` flags, or search nearby local checkouts and datadirs before asking the user for
    help.
-3. Run `python3 scripts/check_wallet_status.py --format json` with the best discovered binary,
+3. Prefer this status sequence in order: `ps` -> `lsof` for cwd/binary when available -> helper
+   script with absolute `--binary` and `--datadir` -> summarize helper output.
+4. Run `python3 scripts/check_wallet_status.py --format json` with the best discovered binary,
    datadir, and the appropriate auth source.
-4. Treat `check_wallet_status.py` as the wallet-status aggregator. It already resolves config and
+5. Treat `check_wallet_status.py` as the wallet-status aggregator. It already resolves config and
    auth shape and collects the log sync signal, balances, note counts, pending operation IDs, and
    recent transactions.
-5. If the config has a single `[[rpc.auth]]` user, let the helper infer that username instead of
+6. If the config has a single `[[rpc.auth]]` user, let the helper infer that username instead of
    opening `zallet.toml` separately unless auth debugging requires it.
-6. If authenticated HTTP succeeds and `summary_available` is true, stop and summarize from the
+7. If authenticated HTTP succeeds and `summary_available` is true, stop and summarize from the
    helper output using the compact template in [references/rpc.md](references/rpc.md), or let the
    helper render the answer directly with `--format summary --timezone local`. Do not inspect the
    helper source, make extra RPC calls, or reopen the config or log unless the helper result is
    missing fields or appears inconsistent.
-7. Do not ask the user to run the helper themselves, and do not request elevated access, unless
+8. Do not ask the user to run the helper themselves, and do not request elevated access, unless
    non-elevated discovery has failed and you can clearly explain the specific blocker.
-8. If no live process exists, report that the wallet is not currently running. Switch to
+9. If no live process exists, report that the wallet is not currently running. Switch to
    [references/cli.md](references/cli.md) only if the user wants startup or config
    troubleshooting.
 
@@ -131,6 +137,38 @@ python3 scripts/check_wallet_status.py \
   --format summary \
   --timezone local
 ```
+
+### Wallet Status Answer Shape
+
+Use these examples as a hard guardrail for weaker models.
+
+Bad answer pattern:
+
+- `Your Zallet wallet process is running, but the .zallet directory is not in the current workspace.`
+- `Want me to find where the process actually wrote its data?`
+
+Why this is bad:
+
+- it treats the current workspace as the wallet location without proving that the wallet was
+  launched there
+- it stops after process discovery instead of resolving cwd or datadir
+- it turns a direct status request into a menu of follow-up tasks
+
+Good answer pattern:
+
+- `Your wallet is running.`
+- `It is using datadir /absolute/path/to/datadir.`
+- `Sync status: ...`
+- `Balance: ...`
+- `Pending operations: ...`
+- `Recent activity: ...`
+
+Required behavior for wallet-status prompts:
+
+- do not stop at `ps`
+- do not infer the datadir from the current workspace
+- do not answer with a next-steps menu when the helper can produce status now
+- resolve the live wallet context and summarize the actual status
 
 ## Guidance Mode
 
