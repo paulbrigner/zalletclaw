@@ -125,6 +125,16 @@ python3 skills/zallet-operator/scripts/check_wallet_status.py \
   --http-password-keychain-account YOUR_RPC_USER
 ```
 
+If a live wallet is already running and the helper can infer the right process, binary, and
+`--datadir`, you can often use the shorter form:
+
+```bash
+python3 skills/zallet-operator/scripts/check_wallet_status.py \
+  --http-password-keychain-service zallet-rpc \
+  --format summary \
+  --timezone local
+```
+
 Example:
 
 ```bash
@@ -157,6 +167,28 @@ Notes:
 - If you want Codex itself to use that environment variable, the Codex app needs to inherit it
   from its launch environment.
 
+## Recent Improvement
+
+### Wallet-status discovery hardening
+
+Recent updates make wallet-status inspection more resilient when agents are working against a
+live local Zallet instance.
+
+Highlights:
+
+- prefer a live `zallet ... start` process over guessed checkout paths
+- avoid anchoring on guessed iCloud Drive or other sync-folder locations when live process
+  evidence points elsewhere
+- avoid bailing out early when `lsof` is unavailable or a single macOS privacy/TCC path is
+  blocked
+- auto-discover the live Zallet binary and datadir from `ps aux` when the helper is invoked with
+  only the default `zallet` binary name
+- keep using `check_wallet_status.py` as the deterministic status aggregator once the live wallet
+  has been resolved
+
+This reduces a common failure mode where an agent sees a wallet process but still asks the user to
+run the helper manually because it guessed the wrong checkout or stopped after one blocked path.
+
 ## Helper Scripts in This Repository
 
 The skill includes small helper scripts to make agent behavior more deterministic:
@@ -164,7 +196,9 @@ The skill includes small helper scripts to make agent behavior more deterministi
 - `skills/zallet-operator/scripts/build_rpc_command.py`
   Builds shell-safe JSON-RPC commands and can choose between CLI and HTTP transport.
 - `skills/zallet-operator/scripts/check_wallet_status.py`
-  Intended for checking local binary, config, and RPC readiness.
+  Intended for checking local binary, config, and RPC readiness. It can also auto-discover a live
+  wallet process from `ps aux` and infer the binary path and datadir when those are not passed
+  explicitly.
 - `skills/zallet-operator/scripts/send_preflight.py`
   Intended for deterministic send summaries before execution.
 
