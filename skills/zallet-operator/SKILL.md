@@ -108,7 +108,9 @@ Hard guardrails:
   JSON-RPC server without compiling the RPC client subcommand.
 - Prefer `zallet rpc help <method>` or `zallet rpc rpc.discover` when you need the live RPC
   contract when the CLI RPC client exists.
-- Prefer `rg` against the adjacent repo when you need to confirm a command name, flag, or method.
+- Prefer `grep` for simple local process checks so the workflow works on stock macOS systems.
+- Use `rg` against the adjacent repo only when it is available and you need to confirm a command name,
+  flag, or method quickly across many files.
 - Render reported timestamps in the user's local timezone when that context is available. If it is
   not, label UTC explicitly instead of implying local time.
 
@@ -151,7 +153,7 @@ Operator recipe:
 Common running-wallet command:
 
 ```bash
-ps aux | rg '[z]allet( |$).*start'
+ps aux | grep '[z]allet' | grep ' start'
 lsof -a -p PID -d cwd,txt -Fn
 python3 scripts/check_wallet_status.py \
   --binary /path/to/zallet \
@@ -264,8 +266,9 @@ Additional hard guardrails for weaker models:
 - Do not ask the user whether to start the wallet when a live process can be discovered directly.
 - Do not narrate step-by-step scratch debugging to the user. Show only: the preflight summary,
   the confirmation request, and the validated execution/result updates.
-- If `rg` or `lsof` is unavailable, do not stall on tool troubleshooting. Fall back to plain `ps`,
+- If `lsof` is unavailable, do not stall on tool troubleshooting. Fall back to plain `ps`,
   nearby checkout discovery, or the helper scripts.
+- If `rg` is unavailable, use `grep` for process checks and keep moving.
 - Prefer a single helper-first path over branching exploration: `check_wallet_status.py` to
   discover context, then `send_preflight.py` to produce the exact confirmation summary.
 

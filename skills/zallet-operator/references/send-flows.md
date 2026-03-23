@@ -79,7 +79,8 @@ Hard guardrails for smaller models:
 - On macOS, omit explicit Keychain flags first unless you need a non-default item; the helper now tries the default `zallet-rpc` Keychain service automatically when it knows the RPC user.
 - Current alpha builds reject a non-null explicit fee. Use `null` for the fee slot or omit the fee entirely when the transport/method variant supports omission.
 - Do not write one-off Python scratch scripts to discover the final RPC shape after confirmation. Use the documented command shape below or `scripts/build_rpc_command.py`.
-- Do not narrate missing `rg`, missing `lsof`, or other scratch-tool hiccups to the user unless they block the final preflight.
+- Do not narrate missing `lsof` or other scratch-tool hiccups to the user unless they block the final preflight.
+- If `rg` is unavailable, use `grep` for process checks and keep the preflight moving.
 
 Prefer the helper script to assemble a shell-safe command:
 

@@ -76,7 +76,7 @@ of guessing a default datadir or probing stale config paths.
 Find the live process, datadir, checkout path, and binary path:
 
 ```bash
-ps aux | rg '[z]allet( |$)'
+ps aux | grep '[z]allet'
 lsof -a -p PID -d cwd,txt -Fn
 ```
 
