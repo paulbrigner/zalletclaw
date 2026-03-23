@@ -8,10 +8,15 @@ management once a wallet is running.
 - Discover a live wallet process before assuming default paths:
   - inspect `ps` output for `zallet ... start`
   - capture `--datadir` or `-d`
-  - use `lsof -a -p <pid> -d cwd,txt -Fn` when you need both the checkout path and the actual
-    binary path
+  - use `lsof -a -p <pid> -d cwd,txt -Fn` when available and permitted and when you need both the
+    checkout path and the actual binary path
+  - if `lsof` is unavailable or blocked, fall back to `ps` arguments plus targeted filesystem
+    discovery near likely local checkouts such as `~/dev`, `~/src`, sibling `../zallet`, or any
+    discovered datadir path instead of stopping early
 - when a live process exists, prefer the resolved binary path from that process over a sibling
   checkout path or any other inferred source path
+- do not anchor on a guessed sync-folder checkout such as iCloud Drive when a live process or
+  discovered datadir points elsewhere
 - Run `zallet --help` before assuming the `rpc` subcommand exists.
 - Use `zallet rpc ...` when the binary exposes the `rpc` subcommand.
 - Use direct HTTP JSON-RPC against the configured `rpc.bind` address when the binary does not.
@@ -61,6 +66,8 @@ of guessing a default datadir or probing stale config paths.
   explicitly rather than assuming `~/.zallet`.
 - Do not describe the wallet as unreachable until you have distinguished "not running" from
   "running but auth or transport failed."
+- Do not treat a failed probe of one guessed checkout or one TCC-restricted path as sufficient
+  evidence that the live wallet cannot be inspected.
 
 ### macOS Keychain-backed default
 

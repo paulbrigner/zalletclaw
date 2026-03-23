@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import subprocess
 import tempfile
 import textwrap
 import unittest
@@ -136,6 +137,99 @@ class CheckWalletStatusTests(unittest.TestCase):
     def test_infer_http_user_from_sole_auth_entry(self) -> None:
         auth_entries = [{"user": "localcheck", "has_pwhash": True, "has_password": False}]
         self.assertEqual(check_wallet_status.infer_http_user(auth_entries), "localcheck")
+
+    def test_discover_live_wallet_process_from_ps_output(self) -> None:
+        ps_output = """USER PID %CPU %MEM VSZ RSS TTY STAT STARTED TIME COMMAND\npaul 30617 0.1 0.2 123 456 ?? SN 9:30PM 0:01 /Users/paul/dev/zallet/zallet -d .zallet start\n"""
+        completed = subprocess.CompletedProcess(args=["ps", "aux"], returncode=0, stdout=ps_output, stderr="")
+
+        with mock.patch.object(check_wallet_status.subprocess, "run", return_value=completed):
+            discovered = check_wallet_status.discover_live_wallet_process()
+
+        assert discovered is not None
+        self.assertEqual(discovered["binary"], "/Users/paul/dev/zallet/zallet")
+        self.assertEqual(discovered["datadir"], "/Users/paul/dev/zallet/.zallet")
+
+    def test_build_status_auto_discovers_binary_and_datadir(self) -> None:
+        args = argparse.Namespace(
+            binary="zallet",
+            datadir=None,
+            config=None,
+            http_url=None,
+            http_user=None,
+            http_password_env=None,
+            http_password_keychain_service=None,
+            http_password_keychain_account=None,
+            probe_method="getwalletinfo",
+            recent_transaction_limit=3,
+            timeout=5,
+            format="json",
+            timezone="utc",
+        )
+
+        with mock.patch.object(
+            check_wallet_status,
+            "discover_live_wallet_process",
+            return_value={
+                "command": "/Users/paul/dev/zallet/zallet -d .zallet start",
+                "argv": ["/Users/paul/dev/zallet/zallet", "-d", ".zallet", "start"],
+                "binary": "/Users/paul/dev/zallet/zallet",
+                "datadir": "/Users/paul/dev/zallet/.zallet",
+            },
+        ), mock.patch.object(
+            check_wallet_status,
+            "resolve_config_path",
+            return_value=Path("/Users/paul/dev/zallet/.zallet/zallet.toml"),
+        ), mock.patch.object(
+            check_wallet_status,
+            "resolve_datadir_path",
+            return_value=Path("/Users/paul/dev/zallet/.zallet"),
+        ), mock.patch.object(
+            check_wallet_status,
+            "load_toml_file",
+            return_value={"rpc": {"bind": "127.0.0.1:28232", "auth": [{"user": "localcheck", "pwhash": "abc"}]}}
+        ), mock.patch.object(
+            check_wallet_status,
+            "read_log_status",
+            return_value={
+                "path": "/Users/paul/dev/zallet/.zallet/zallet.log",
+                "exists": True,
+                "latest_chain_tip": None,
+                "recently_reached_chain_tip": False,
+                "latest_reached_chain_tip_log_time": None,
+            },
+        ), mock.patch.object(
+            check_wallet_status,
+            "json_rpc_request",
+            return_value={
+                "http_ok": True,
+                "status_code": 200,
+                "rpc_error": None,
+                "rpc_result": {"walletversion": 0, "mnemonic_seedfp": "TODO", "txcount": 0},
+                "transport_error": None,
+            },
+        ), mock.patch.object(
+            check_wallet_status,
+            "build_wallet_summary",
+            return_value={
+                "summary_attempted": True,
+                "summary_available": False,
+                "account_count": 0,
+                "accounts": [],
+                "note_counts": None,
+                "operation_ids": [],
+                "method_errors": {},
+            },
+        ), mock.patch.object(
+            check_wallet_status,
+            "binary_supports_rpc",
+            return_value=False,
+        ):
+            status = check_wallet_status.build_status(args)
+
+        self.assertEqual(status["binary"]["resolved_path"], "/Users/paul/dev/zallet/zallet")
+        self.assertEqual(status["config"]["datadir"], "/Users/paul/dev/zallet/.zallet")
+        self.assertTrue(any("Auto-discovered live wallet binary" in note for note in status["notes"]))
+        self.assertTrue(any("Auto-discovered live wallet datadir" in note for note in status["notes"]))
 
     def test_build_wallet_summary_collects_balances_and_recent_transactions(self) -> None:
         def fake_json_rpc_request(url, method, params, timeout, user, password):

@@ -9,7 +9,9 @@ import argparse
 from datetime import datetime, timezone
 import json
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -31,6 +33,74 @@ from zallet_rpc_util import (
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 CHAIN_TIP_RE = re.compile(r"New chain tip:\s+(?P<height>\d+)\s+(?P<hash>[0-9a-fA-F]+)")
+
+
+def parse_ps_command(line: str) -> str | None:
+    parts = line.strip().split(None, 10)
+    if len(parts) < 11:
+        return None
+
+    return parts[10]
+
+
+def extract_datadir_from_argv(argv: list[str]) -> str | None:
+    for index, token in enumerate(argv):
+        if token in ("-d", "--datadir") and index + 1 < len(argv):
+            return argv[index + 1]
+        if token.startswith("--datadir="):
+            return token.split("=", 1)[1]
+
+    return None
+
+
+def discover_live_wallet_process() -> dict[str, object] | None:
+    try:
+        result = subprocess.run(
+            ["ps", "aux"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+
+    for line in (result.stdout or "").splitlines():
+        command = parse_ps_command(line)
+        if not command or "zallet" not in command or " start" not in command:
+            continue
+
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+
+        if not argv:
+            continue
+
+        binary = argv[0]
+        if Path(binary).name != "zallet":
+            continue
+
+        datadir = extract_datadir_from_argv(argv)
+        binary_path = Path(binary).expanduser()
+        resolved_binary = binary_path.resolve(strict=False) if binary_path.is_absolute() else binary_path
+
+        resolved_datadir = None
+        if datadir:
+            datadir_path = Path(datadir).expanduser()
+            if datadir_path.is_absolute():
+                resolved_datadir = datadir_path.resolve(strict=False)
+            elif binary_path.is_absolute():
+                resolved_datadir = (resolved_binary.parent / datadir_path).resolve(strict=False)
+
+        return {
+            "command": command,
+            "argv": argv,
+            "binary": str(resolved_binary) if binary_path.is_absolute() else binary,
+            "datadir": str(resolved_datadir) if resolved_datadir else datadir,
+        }
+
+    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -439,8 +509,18 @@ def build_wallet_summary(
 
 
 def build_status(args: argparse.Namespace) -> dict[str, object]:
-    config_path = resolve_config_path(args.datadir, args.config)
-    datadir_path = resolve_datadir_path(args.datadir, config_path)
+    live_process = discover_live_wallet_process()
+
+    effective_binary = args.binary
+    if args.binary == "zallet" and live_process and isinstance(live_process.get("binary"), str):
+        effective_binary = str(live_process["binary"])
+
+    effective_datadir = args.datadir
+    if effective_datadir is None and live_process and isinstance(live_process.get("datadir"), str):
+        effective_datadir = str(live_process["datadir"])
+
+    config_path = resolve_config_path(effective_datadir, args.config)
+    datadir_path = resolve_datadir_path(effective_datadir, config_path)
     config_data = load_toml_file(config_path)
     binds = extract_rpc_binds(config_data)
     auth_entries = extract_rpc_auth(config_data)
@@ -466,7 +546,7 @@ def build_status(args: argparse.Namespace) -> dict[str, object]:
             password=password_info["password"],
         )
 
-    log_status = read_log_status(infer_log_path(args.datadir, config_path))
+    log_status = read_log_status(infer_log_path(effective_datadir, config_path))
     wallet_summary: dict[str, object] = {
         "summary_attempted": False,
         "summary_available": False,
@@ -486,6 +566,11 @@ def build_status(args: argparse.Namespace) -> dict[str, object]:
         )
 
     notes: list[str] = []
+    if live_process:
+        if args.binary == "zallet" and effective_binary != args.binary:
+            notes.append(f"Auto-discovered live wallet binary from process list: {effective_binary}.")
+        if args.datadir is None and effective_datadir:
+            notes.append(f"Auto-discovered live wallet datadir from process list: {effective_datadir}.")
     if args.http_user is None and inferred_http_user:
         notes.append(f"Inferred HTTP client user {inferred_http_user} from the sole rpc.auth entry.")
     if auth_entries and any(entry.get("has_pwhash") for entry in auth_entries):
@@ -526,10 +611,11 @@ def build_status(args: argparse.Namespace) -> dict[str, object]:
     return {
         "binary": {
             "requested": args.binary,
-            "resolved_path": shutil.which(args.binary) or args.binary,
-            "exists": shutil.which(args.binary) is not None or Path(args.binary).exists(),
-            "supports_rpc_cli": binary_supports_rpc(args.binary),
+            "resolved_path": shutil.which(effective_binary) or effective_binary,
+            "exists": shutil.which(effective_binary) is not None or Path(effective_binary).exists(),
+            "supports_rpc_cli": binary_supports_rpc(effective_binary),
         },
+        "live_process": live_process,
         "config": {
             "datadir": str(datadir_path) if datadir_path else None,
             "path": str(config_path) if config_path else None,

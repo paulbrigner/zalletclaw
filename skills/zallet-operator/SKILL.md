@@ -57,10 +57,18 @@ Use this skill for prompts such as:
 - Discover the live wallet process before assuming default paths:
   - inspect `ps` output for a running `zallet ... start`
   - capture the explicit `--datadir` or `-d` value when present
-  - use `lsof -a -p <pid> -d cwd,txt -Fn` when you need the running checkout path and the actual
-    binary path
+  - use `lsof -a -p <pid> -d cwd,txt -Fn` when available and permitted to recover the running
+    checkout path and the actual binary path
+  - if `lsof` is unavailable or blocked, fall back to `ps` arguments plus targeted filesystem
+    discovery near likely local checkouts such as `~/dev`, `~/src`, sibling `../zallet`, or any
+    discovered datadir path instead of stopping early
 - when a live process exists, prefer its resolved binary path over a sibling `../zallet` checkout
   or any other inferred source path
+- do not anchor on a guessed iCloud Drive, Desktop, or other sync-folder checkout when a live
+  process or discovered datadir points elsewhere
+- do not stop at the first macOS privacy or TCC barrier if other non-elevated discovery paths are
+  still available; only ask the user to run a command or grant more access after exhausting the
+  live-process, datadir, and local-filesystem fallbacks
 - Check `zallet --help` before assuming the `rpc` CLI subcommand exists; some builds expose the
   JSON-RPC server without compiling the RPC client subcommand.
 - Prefer `zallet rpc help <method>` or `zallet rpc rpc.discover` when you need the live RPC
@@ -77,19 +85,24 @@ When the user asks for wallet status, answer from multiple signals instead of re
 Operator recipe:
 
 1. Find a live `zallet ... start` process and resolve its binary path and datadir.
-2. Run `python3 scripts/check_wallet_status.py --format json` with the discovered binary,
+2. If the process metadata is incomplete, keep going: infer the datadir from explicit `-d` or
+   `--datadir` flags, or search nearby local checkouts and datadirs before asking the user for
+   help.
+3. Run `python3 scripts/check_wallet_status.py --format json` with the best discovered binary,
    datadir, and the appropriate auth source.
-3. Treat `check_wallet_status.py` as the wallet-status aggregator. It already resolves config and
+4. Treat `check_wallet_status.py` as the wallet-status aggregator. It already resolves config and
    auth shape and collects the log sync signal, balances, note counts, pending operation IDs, and
    recent transactions.
-4. If the config has a single `[[rpc.auth]]` user, let the helper infer that username instead of
+5. If the config has a single `[[rpc.auth]]` user, let the helper infer that username instead of
    opening `zallet.toml` separately unless auth debugging requires it.
-5. If authenticated HTTP succeeds and `summary_available` is true, stop and summarize from the
+6. If authenticated HTTP succeeds and `summary_available` is true, stop and summarize from the
    helper output using the compact template in [references/rpc.md](references/rpc.md), or let the
    helper render the answer directly with `--format summary --timezone local`. Do not inspect the
    helper source, make extra RPC calls, or reopen the config or log unless the helper result is
    missing fields or appears inconsistent.
-6. If no live process exists, report that the wallet is not currently running. Switch to
+7. Do not ask the user to run the helper themselves, and do not request elevated access, unless
+   non-elevated discovery has failed and you can clearly explain the specific blocker.
+8. If no live process exists, report that the wallet is not currently running. Switch to
    [references/cli.md](references/cli.md) only if the user wants startup or config
    troubleshooting.
 
